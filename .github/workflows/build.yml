@@ -1,0 +1,109 @@
+name: Build package
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_tag:
+        description: 'jellyfin-web tag to build (default: latest release)'
+        required: false
+        default: ''
+        type: string
+      publish_npm:
+        description: 'Also publish to npm'
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      web_tag:
+        required: true
+        type: string
+      publish_npm:
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve jellyfin-web tag
+        id: resolve
+        run: |
+          TAG="${{ inputs.web_tag }}"
+          if [ -z "${TAG}" ]; then
+            TAG="$(curl -sS https://api.github.com/repos/jellyfin/jellyfin-web/releases/latest | jq -r .tag_name)"
+          fi
+          if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
+            echo "could not resolve a jellyfin-web tag" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building jellyfin-web ${TAG}"
+
+      - name: Install dev dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build package
+        env:
+          PACKAGE_VERSION: ${{ steps.resolve.outputs.tag }}
+        run: |
+          # Strip a leading v so the npm version stays semver-clean.
+          export PACKAGE_VERSION="${PACKAGE_VERSION#v}"
+          ./scripts/build.sh "${{ steps.resolve.outputs.tag }}"
+
+      - name: Verify metadata against the built package
+        env:
+          # Without this, the metadata tests use it.skipIf(...) and silently
+          # skip when dist-build/ is missing, giving a false-green CI gate.
+          # Setting it here (after the build) forces them to fail loudly
+          # instead of skipping if the package metadata is somehow absent.
+          REQUIRE_DIST_BUILD: 1
+        run: npx vitest run test/package-metadata.test.js
+
+      - name: Push to dist branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          cd dist-build
+          git init -q
+          git checkout -q -b dist
+          git add -A
+          git commit -q -m "build: jellyfin-web ${{ steps.resolve.outputs.tag }}"
+          git push -q --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            dist
+
+      - name: Record the built version
+        run: |
+          jq --arg tag "${{ steps.resolve.outputs.tag }}" \
+            '.lastBuiltWebTag = $tag' versions.json > versions.tmp
+          mv versions.tmp versions.json
+
+          git add versions.json
+          git commit -m "chore: 🔧 record built jellyfin-web ${{ steps.resolve.outputs.tag }}" || echo "nothing to record"
+          git push || echo "nothing to push"
+
+      - name: Publish to npm
+        if: inputs.publish_npm
+        working-directory: dist-build
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
