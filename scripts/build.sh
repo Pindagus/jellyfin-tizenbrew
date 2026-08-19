@@ -104,4 +104,7 @@ EOF
 perl -pi -e "s/var APP_VERSION = 'DEVELOPMENT';/var APP_VERSION = '${VERSION}';/" \
     "${OUT}/tizen-adapter.js"
 
+echo "==> Verifying output"
+"${ROOT}/scripts/verify-build.sh"
+
 echo "==> Done. Output in ${OUT}"
