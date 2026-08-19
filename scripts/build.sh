@@ -75,4 +75,33 @@ cp "${WORK}/jellyfin-tizen/index.html" "${OUT}/index.html"
 cp "${WORK}/jellyfin-tizen/tizen.js" "${OUT}/tizen.js"
 cp "${ROOT}/tizen-adapter.js" "${OUT}/tizen-adapter.js"
 
+echo "==> Writing TizenBrew metadata"
+VERSION="${PACKAGE_VERSION:-0.0.0-dev}"
+
+cat > "${OUT}/package.json" <<EOF
+{
+  "name": "@pindagus/jellyfin-tizenbrew",
+  "version": "${VERSION}",
+  "description": "Jellyfin for Samsung Smart TV via TizenBrew",
+  "license": "MPL-2.0",
+  "packageType": "app",
+  "appName": "Jellyfin",
+  "appPath": "index.html",
+  "keys": [
+    "MediaPlayPause",
+    "MediaPlay",
+    "MediaPause",
+    "MediaStop",
+    "MediaTrackPrevious",
+    "MediaTrackNext",
+    "MediaRewind",
+    "MediaFastForward"
+  ]
+}
+EOF
+
+# Stamp the adapter with the version being shipped, replacing the DEVELOPMENT default.
+perl -pi -e "s/var APP_VERSION = 'DEVELOPMENT';/var APP_VERSION = '${VERSION}';/" \
+    "${OUT}/tizen-adapter.js"
+
 echo "==> Done. Output in ${OUT}"
