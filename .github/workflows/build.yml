@@ -54,11 +54,50 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Building jellyfin-web ${TAG}"
 
+      - name: Determine required Node.js version
+        id: node_for_web
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          PKG_URL="https://raw.githubusercontent.com/jellyfin/jellyfin-web/${TAG}/package.json"
+
+          PKG_JSON="$(curl -sSf "${PKG_URL}")" || {
+            echo "ERROR: could not fetch package.json for jellyfin-web ${TAG} from ${PKG_URL}" >&2
+            exit 1
+          }
+
+          NPM_ENGINE="$(echo "${PKG_JSON}" | jq -r '.engines.npm // empty')"
+          if [ -z "${NPM_ENGINE}" ]; then
+            echo "ERROR: jellyfin-web ${TAG} package.json has no engines.npm field, refusing to guess a Node version" >&2
+            exit 1
+          fi
+
+          # Extract the major version from an upper-bound clause like "<11.0.0", if present.
+          # The `|| true` prevents pipefail from killing the script when there is no upper bound at all.
+          UPPER_MAJOR="$(echo "${NPM_ENGINE}" | grep -oE '<[0-9]+' | head -n1 | tr -d '<' || true)"
+
+          # An upper bound at or below npm major 11 (e.g. "<11.0.0") excludes npm 11.x,
+          # which node 24 ships. Node 22 ships npm 10.x, which satisfies that bound.
+          # No upper bound, or a bound above 11, means npm 11.x is required, which node 24 ships.
+          if [ -n "${UPPER_MAJOR}" ] && [ "${UPPER_MAJOR}" -le 11 ]; then
+            NODE_VERSION=22
+          else
+            NODE_VERSION=24
+          fi
+
+          echo "jellyfin-web ${TAG} requires npm ${NPM_ENGINE} -> selecting Node.js ${NODE_VERSION}"
+          echo "node_version=${NODE_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Install dev dependencies
         run: npm ci
 
       - name: Run unit tests
         run: npm test
+
+      - name: Switch Node.js to the version jellyfin-web requires
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node_for_web.outputs.node_version }}
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Build package
         env:
