@@ -160,30 +160,38 @@ describe('tizen-adapter', () => {
         expect(win.webapis.productinfo.isUdPanelSupported()).toBe(true);
     });
 
-    it('navigates back to the TizenBrew launcher on exit', () => {
-        win.location = { href: '' };
+    it('goes back in history on exit rather than navigating by URL', () => {
+        // The launcher lives at a widget-local path (config.xml <content src=...>),
+        // not on the module's 127.0.0.1:8081 origin, so navigating to it by URL hits
+        // the proxy and renders a bare IP address. Going back reuses the history
+        // entry the launcher's own location.href navigation left behind.
+        let wentBack = false;
+        win.location = { href: 'http://127.0.0.1:8081/module/x/www/index.html' };
+        win.history = { back: () => { wentBack = true; } };
 
         const app = win.tizen.application.getCurrentApplication();
         app.exit();
 
-        expect(win.location.href).toBe('/tizenbrew-ui/dist/index.html');
+        expect(wentBack).toBe(true);
+        expect(win.location.href).toBe('http://127.0.0.1:8081/module/x/www/index.html');
     });
 
-    it('prefers an explicit TizenBrew exit hook over the location fallback', () => {
-        win.location = { href: '' };
+    it('prefers an explicit TizenBrew exit hook over the history fallback', () => {
+        let wentBack = false;
         let called = false;
+        win.history = { back: () => { wentBack = true; } };
         win.tizenbrew = { exit: () => { called = true; } };
 
         const app = win.tizen.application.getCurrentApplication();
         app.exit();
 
         expect(called).toBe(true);
-        // The fallback navigation must not also run when the hook succeeds.
-        expect(win.location.href).toBe('');
+        // The fallback must not also run when the hook succeeds.
+        expect(wentBack).toBe(false);
     });
 
     it('warns instead of throwing when exit has no usable mechanism', () => {
-        win.location = undefined;
+        win.history = undefined;
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         const app = win.tizen.application.getCurrentApplication();
@@ -229,6 +237,63 @@ describe('tizen-adapter', () => {
                 }
             }
             expect(count).toBe(1);
+        });
+    });
+
+    // The build puts this script in <head> without `defer`, so it executes while
+    // document.body is still null. These tests pin that startup path: observing a
+    // null node throws, which used to leave the block silently uninjected.
+    describe('observer startup before body exists', () => {
+        // Loads the adapter against a real global document, the way the browser
+        // does, rather than calling the exported inject helper directly.
+        function loadAdapterInDocument({ bodyAtLoad }) {
+            const doc = createFakeDocument({ withAnchor: true });
+            const listeners = {};
+
+            doc.body = bodyAtLoad ? createFakeElement('body') : null;
+            doc.addEventListener = (event, handler) => {
+                listeners[event] = handler;
+            };
+
+            const observed = [];
+            class FakeMutationObserver {
+                constructor(callback) {
+                    this.callback = callback;
+                }
+                observe(target) {
+                    if (!target) {
+                        throw new TypeError("parameter 1 is not of type 'Node'");
+                    }
+                    observed.push(target);
+                }
+            }
+
+            const win = { screen: { width: 1920, height: 1080 } };
+            const fn = new Function('window', 'document', 'MutationObserver', 'console', adapterSource);
+            fn(win, doc, FakeMutationObserver, { warn: () => {} });
+
+            return { win, doc, listeners, observed };
+        }
+
+        it('defers observing until DOMContentLoaded when body is not parsed yet', () => {
+            const { doc, listeners, observed } = loadAdapterInDocument({ bodyAtLoad: false });
+
+            // Nothing may be observed yet: body did not exist at load time.
+            expect(observed).toHaveLength(0);
+            expect(listeners.DOMContentLoaded).toBeTypeOf('function');
+
+            doc.body = createFakeElement('body');
+            listeners.DOMContentLoaded();
+
+            expect(observed).toHaveLength(1);
+            expect(doc.getElementById('tizenAdapterVersionInfo')).not.toBeNull();
+        });
+
+        it('observes immediately when body already exists', () => {
+            const { doc, observed } = loadAdapterInDocument({ bodyAtLoad: true });
+
+            expect(observed).toHaveLength(1);
+            expect(doc.getElementById('tizenAdapterVersionInfo')).not.toBeNull();
         });
     });
 });

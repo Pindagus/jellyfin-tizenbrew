@@ -89,9 +89,10 @@ change does not break the build, but does become visible in the build log.
 
 - No DRM. TizenBrew does not request the `drmplay` privilege.
 - Hardware decoding has not been compared against a real sideloaded `.wgt`.
-- Exiting navigates back to the TizenBrew launcher page. That route is derived from
-  TizenBrew's own source rather than a documented API, so it may break if TizenBrew
-  moves its launcher, and it has not yet been confirmed on hardware.
+- Exiting steps back in history to reach the TizenBrew launcher. The launcher is
+  widget-local content rather than something served over HTTP, so it cannot be
+  reached by URL from the module. This route is derived from TizenBrew's own source
+  rather than a documented API, and has not yet been confirmed on hardware.
 
 ## Related work
 
