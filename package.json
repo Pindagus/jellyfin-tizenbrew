@@ -5,7 +5,8 @@
   "description": "Build sources for the Jellyfin TizenBrew package",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "./scripts/build.sh"
   },
   "devDependencies": {
     "vitest": "^3.2.4"
