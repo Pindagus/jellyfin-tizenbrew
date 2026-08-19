@@ -18,10 +18,8 @@ Or via npm:
 @pindagus/jellyfin-tizenbrew
 ```
 
-Both installation paths depend on the source repository being public: jsDelivr
-(which TizenBrew uses to fetch the package) only serves public GitHub repos. The
-`dist` branch also does not exist yet, it is created by the build workflow on its
-first run, which has not happened yet at the time of writing.
+TizenBrew fetches the package through jsDelivr, which serves the `dist` branch of
+this repository.
 
 ## How it works
 
@@ -37,16 +35,20 @@ The only project-owned code is `tizen-adapter.js`. The wrapper normally loads
 `.wgt`. That path does not exist in TizenBrew, so the build replaces the reference
 with our adapter, which mimics the Tizen APIs the wrapper actually uses.
 
-After assembling `dist-build/`, `scripts/verify-build.sh` checks whether the result
-would actually run on the TV, and fails hard if it would not. It checks content, not
-just presence: that `package.json` carries the TizenBrew fields (`packageType`,
-`appName`, `appPath`, `keys`), that the `$WEBAPIS` placeholder was really replaced,
-that the wrapper (`tizen.js`) and the adapter are not empty or truncated, that the
-version stamp was applied to `tizen-adapter.js`, and that `www/` contains at least
-500 files (a real build produces around 1242). This exists because the patches in
-`scripts/build.sh` warn instead of fail when a pattern is not found, so an upstream
-rename does not silently break the pipeline, it fails visibly at the verification
-step instead.
+The patches deliberately warn instead of failing when upstream renames something, so
+that a rename does not break the whole pipeline. To keep that from shipping a package
+that looks complete but does not start, `scripts/verify-build.sh` inspects the result
+and fails the build if it would not run on the TV. It checks content rather than mere
+presence, so an empty wrapper or a `package.json` missing its TizenBrew fields is
+caught before publishing.
+
+## Versioning
+
+Releases are numbered `<module>+jellyfin-web.<upstream>`, for example
+`1.0.0+jellyfin-web.10.11.11`. The first part is this module's own semver and moves
+when the module changes; the part after the plus is semver build metadata naming the
+jellyfin-web release inside. Both numbers are also shown on the settings page in the
+client, so you can tell from the TV which build you are running.
 
 ## Branches
 
@@ -79,16 +81,10 @@ change does not break the build, but does become visible in the build log.
 ## Known limitations
 
 - No DRM. TizenBrew does not request the `drmplay` privilege.
-- Exiting the app back to TizenBrew is not solved yet. The wrapper calls
-  `tizen.application.getCurrentApplication().exit()`, but our shim cannot do
-  anything meaningful there: the module runs inside TizenBrew and has no widget of
-  its own to close. This was also a reported complaint against the previous,
-  abandoned package.
-- Fullscreen behavior and hardware decoding inside TizenBrew's container have not
-  been verified against a real sideloaded `.wgt`.
-
-None of the above has been confirmed on an actual TV yet; that verification is a
-separate, manual step.
+- Hardware decoding has not been compared against a real sideloaded `.wgt`.
+- Exiting navigates back to the TizenBrew launcher page. That route is derived from
+  TizenBrew's own source rather than a documented API, so it may break if TizenBrew
+  moves its launcher, and it has not yet been confirmed on hardware.
 
 ## Related work
 
