@@ -3,6 +3,11 @@
 # Usage: ./scripts/build.sh [jellyfin-web-tag]
 set -euo pipefail
 
+# Our own semver for the module itself, independent of the jellyfin-web version
+# it bundles. Bump this by hand whenever we ship a change to tizen-adapter.js
+# or the packaging around it (not for routine jellyfin-web version bumps).
+MODULE_VERSION="1.0.0"
+
 WEB_TAG="${1:-master}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${ROOT}/.build-work"
@@ -76,12 +81,19 @@ cp "${WORK}/jellyfin-tizen/tizen.js" "${OUT}/tizen.js"
 cp "${ROOT}/tizen-adapter.js" "${OUT}/tizen-adapter.js"
 
 echo "==> Writing TizenBrew metadata"
-VERSION="${PACKAGE_VERSION:-0.0.0-dev}"
+# PACKAGE_VERSION carries the jellyfin-web version being bundled (set by CI from
+# the resolved jellyfin-web tag; defaults to a dev placeholder for local builds).
+WEB_VERSION="${PACKAGE_VERSION:-0.0.0-dev}"
+
+# npm's published version stays our own MODULE_VERSION, with the bundled
+# jellyfin-web version attached as semver build metadata (the "+..." suffix).
+# npm accepts this natively; it is not part of version comparisons.
+PACKAGE_VERSION_FULL="${MODULE_VERSION}+jellyfin-web.${WEB_VERSION}"
 
 cat > "${OUT}/package.json" <<EOF
 {
   "name": "@pindagus/jellyfin-tizenbrew",
-  "version": "${VERSION}",
+  "version": "${PACKAGE_VERSION_FULL}",
   "description": "Jellyfin for Samsung Smart TV via TizenBrew",
   "license": "MPL-2.0",
   "packageType": "app",
@@ -100,8 +112,10 @@ cat > "${OUT}/package.json" <<EOF
 }
 EOF
 
-# Stamp the adapter with the version being shipped, replacing the DEVELOPMENT default.
-perl -pi -e "s/var APP_VERSION = 'DEVELOPMENT';/var APP_VERSION = '${VERSION}';/" \
+# Stamp the adapter with both version numbers, replacing the DEVELOPMENT defaults.
+perl -pi -e "s/var MODULE_VERSION = 'DEVELOPMENT';/var MODULE_VERSION = '${MODULE_VERSION}';/" \
+    "${OUT}/tizen-adapter.js"
+perl -pi -e "s/var WEB_VERSION = 'DEVELOPMENT';/var WEB_VERSION = '${WEB_VERSION}';/" \
     "${OUT}/tizen-adapter.js"
 
 echo "==> Verifying output"

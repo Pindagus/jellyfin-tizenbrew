@@ -73,7 +73,7 @@ if [ -f "${OUT}/tizen-adapter.js" ]; then
         fail "tizen-adapter.js is empty"
     else
         if grep -q "'DEVELOPMENT'" "${OUT}/tizen-adapter.js"; then
-            fail "tizen-adapter.js still contains the 'DEVELOPMENT' placeholder; the version stamping step did not run"
+            fail "tizen-adapter.js still contains a 'DEVELOPMENT' placeholder; the version stamping step did not run"
         fi
         if ! grep -q 'window.tizen' "${OUT}/tizen-adapter.js"; then
             fail "tizen-adapter.js does not define window.tizen"
