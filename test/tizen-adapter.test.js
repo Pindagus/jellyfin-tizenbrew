@@ -49,4 +49,30 @@ describe('tizen-adapter', () => {
     it('does not throw when no callback is supplied', () => {
         expect(() => win.tizen.systeminfo.getPropertyValue('DISPLAY')).not.toThrow();
     });
+
+    it('provides an app version string for AppInfo', () => {
+        const app = win.tizen.application.getCurrentApplication();
+        expect(typeof app.appInfo.version).toBe('string');
+        expect(app.appInfo.version.length).toBeGreaterThan(0);
+    });
+
+    it('exposes exit as a callable so AppHost.exit does not throw', () => {
+        const app = win.tizen.application.getCurrentApplication();
+        expect(() => app.exit()).not.toThrow();
+    });
+
+    it('accepts key registration without throwing', () => {
+        // TizenBrew registers the keys itself from package.json, so these are no-ops,
+        // but the wrapper calls them unconditionally at startup.
+        expect(() => win.tizen.tvinputdevice.registerKey('MediaPlay')).not.toThrow();
+        expect(() => win.tizen.tvinputdevice.unregisterKey('MediaPlayPause')).not.toThrow();
+    });
+
+    it('reports UHD but not 8K panel support', () => {
+        // The wrapper guards both with typeof === 'function', so they must be real
+        // functions. devicePixelRatio is unreliable on the TV browser, hence hardcoding.
+        expect(typeof win.webapis.productinfo.is8KPanelSupported).toBe('function');
+        expect(win.webapis.productinfo.is8KPanelSupported()).toBe(false);
+        expect(win.webapis.productinfo.isUdPanelSupported()).toBe(true);
+    });
 });
