@@ -6,20 +6,27 @@ without a developer certificate that expires every 90 days.
 
 ## Installation
 
-Open TizenBrew on the TV, press the green button and add via GitHub:
-
-```
-Pindagus/jellyfin-tizenbrew@dist
-```
-
-Or via npm:
+Open TizenBrew on the TV, press the green button, choose to add via NPM and enter:
 
 ```
 @pindagus/jellyfin-tizenbrew
 ```
 
-TizenBrew fetches the package through jsDelivr, which serves the `dist` branch of
-this repository.
+That is the released package and the one to use.
+
+> **Not published yet.** The npm package is not live at the moment, so this route
+> does not work today. Use the development build below until it is.
+
+### Development builds
+
+Adding via GitHub instead installs straight from the `dist` branch, which is
+rebuilt on every run of the build workflow and is not tied to a release:
+
+```
+Pindagus/jellyfin-tizenbrew@dist
+```
+
+Use it to try a change before it is published. It can be broken at any moment.
 
 ## How it works
 
