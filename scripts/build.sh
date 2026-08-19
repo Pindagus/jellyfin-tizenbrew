@@ -85,6 +85,16 @@ echo "==> Writing TizenBrew metadata"
 # the resolved jellyfin-web tag; defaults to a dev placeholder for local builds).
 WEB_VERSION="${PACKAGE_VERSION:-0.0.0-dev}"
 
+# A dev build needs a version npm has not seen before, since npm refuses to
+# republish an existing one. DEV_BUILD_ID (the CI run number) becomes a semver
+# prerelease suffix, which also keeps these builds off the "latest" dist-tag:
+# npm and jsDelivr both resolve an unqualified install to the newest stable
+# version, never to a prerelease. Users therefore only ever get releases, while
+# the dev dist-tag points at the newest of these.
+if [ -n "${DEV_BUILD_ID:-}" ]; then
+    MODULE_VERSION="${MODULE_VERSION}-dev.${DEV_BUILD_ID}"
+fi
+
 # npm's published version stays our own MODULE_VERSION, with the bundled
 # jellyfin-web version attached as semver build metadata (the "+..." suffix).
 # npm accepts this natively; it is not part of version comparisons.

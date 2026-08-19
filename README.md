@@ -12,21 +12,35 @@ Open TizenBrew on the TV, press the green button, choose to add via NPM and ente
 @pindagus/jellyfin-tizenbrew
 ```
 
-That is the released package and the one to use.
+That is the released package and the one to use. It always resolves to the latest
+release, never to a development build.
 
 > **Not published yet.** The npm package is not live at the moment, so this route
-> does not work today. Use the development build below until it is.
+> does not work today.
 
 ### Development builds
 
-Adding via GitHub instead installs straight from the `dist` branch, which is
-rebuilt on every run of the build workflow and is not tied to a release:
+Development builds are published to npm under the `dev` dist-tag:
+
+```
+@pindagus/jellyfin-tizenbrew@dev
+```
+
+Enter that once and it keeps pointing at the newest development build. Because
+these are semver prereleases, they never satisfy an unqualified install, so the
+line above is the only way to reach them. They can be broken at any moment.
+
+Adding via GitHub instead installs from the `dist` branch, which is rebuilt on
+every run of the build workflow:
 
 ```
 Pindagus/jellyfin-tizenbrew@dist
 ```
 
-Use it to try a change before it is published. It can be broken at any moment.
+Prefer the `dev` tag over this one. jsDelivr caches branch URLs for around 12
+hours and refreshes files independently of each other, so a freshly built `dist`
+can serve a mix of two builds. npm versions are immutable and do not have that
+problem.
 
 ## How it works
 
@@ -56,6 +70,10 @@ Releases are numbered `<module>+jellyfin-web.<upstream>`, for example
 when the module changes; the part after the plus is semver build metadata naming the
 jellyfin-web release inside. Both numbers are also shown on the settings page in the
 client, so you can tell from the TV which build you are running.
+
+Development builds add a prerelease suffix carrying the CI run number, as in
+`1.0.0-dev.42+jellyfin-web.10.11.11`. The module version stays where it is; only
+the suffix moves, so testing never advances the release number.
 
 ## Branches
 

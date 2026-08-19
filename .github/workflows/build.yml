@@ -9,10 +9,14 @@ on:
         default: ''
         type: string
       publish_npm:
-        description: 'Also publish to npm'
+        description: 'Publish to npm'
         required: false
-        default: false
-        type: boolean
+        default: 'no'
+        type: choice
+        options:
+          - 'no'
+          - 'dev'
+          - 'release'
   workflow_call:
     inputs:
       web_tag:
@@ -20,8 +24,8 @@ on:
         type: string
       publish_npm:
         required: false
-        default: false
-        type: boolean
+        default: 'no'
+        type: string
 
 permissions:
   contents: write
@@ -102,6 +106,9 @@ jobs:
       - name: Build package
         env:
           PACKAGE_VERSION: ${{ steps.resolve.outputs.tag }}
+          # Only a dev publish needs the prerelease suffix. A release keeps the
+          # bare MODULE_VERSION so it lands on the "latest" dist-tag.
+          DEV_BUILD_ID: ${{ inputs.publish_npm == 'dev' && github.run_number || '' }}
         run: |
           # Strip a leading v so the npm version stays semver-clean.
           export PACKAGE_VERSION="${PACKAGE_VERSION#v}"
@@ -156,8 +163,28 @@ jobs:
           fi
 
       - name: Publish to npm
-        if: inputs.publish_npm
+        if: inputs.publish_npm == 'dev' || inputs.publish_npm == 'release'
         working-directory: dist-build
-        run: npm publish --access public
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN is not set in the repository secrets" >&2
+            exit 1
+          fi
+
+          # A dev build goes out under its own dist-tag so an unqualified
+          # install keeps resolving to the last release. Publishing a
+          # prerelease without --tag would still leave "latest" alone, but
+          # naming it explicitly is what makes @dev installable.
+          if [ "${{ inputs.publish_npm }}" = 'dev' ]; then
+            DIST_TAG=dev
+            npm publish --access public --tag dev
+          else
+            DIST_TAG=latest
+            npm publish --access public
+          fi
+
+          # Report what the tag actually resolves to, so the log shows the
+          # published version rather than merely that the command exited 0.
+          npm view "@pindagus/jellyfin-tizenbrew@${DIST_TAG}" version
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
