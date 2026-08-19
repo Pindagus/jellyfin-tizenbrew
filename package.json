@@ -1,0 +1,13 @@
+{
+  "name": "jellyfin-tizenbrew-src",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build sources for the Jellyfin TizenBrew package",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
