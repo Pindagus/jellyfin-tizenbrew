@@ -11,9 +11,30 @@
     var WEB_VERSION = 'DEVELOPMENT';
     var TIZEN_COMMIT = 'DEVELOPMENT';
 
-    // How deep the history was when this module was loaded, captured before
-    // jellyfin-web has had any chance to navigate. Exiting means returning to
-    // exactly this depth, so it has to be read now rather than on exit.
+    // Where this module started in the history, captured before jellyfin-web has
+    // navigated anywhere. Exiting means returning to exactly this point, so both
+    // readings have to be taken now rather than on exit.
+    //
+    // routerIndex is the reliable one. jellyfin-web routes with react-router
+    // 6.30.1 (createHashRouter), which keeps its own position in
+    // history.state.idx: it writes idx 0 on init and increments on every push,
+    // leaving it alone on a replace. That counts only this app's own navigation.
+    // history.length counts the whole tab, including whatever the launcher did
+    // before handing over, so it is the fallback rather than the measure.
+    function readRouterIndex() {
+        if (!window.history) {
+            return null;
+        }
+
+        var state = window.history.state;
+        if (state && typeof state.idx === 'number') {
+            return state.idx;
+        }
+
+        return null;
+    }
+
+    var ROUTER_INDEX_AT_LOAD = readRouterIndex();
     var HISTORY_DEPTH_AT_LOAD = (window.history && typeof window.history.length === 'number')
         ? window.history.length
         : 0;
@@ -44,23 +65,38 @@
             // that assumes the launcher is still the previous entry, which only
             // holds until jellyfin-web navigates. It is a single-page app that
             // pushes an entry per view, so after visiting settings a plain back()
-            // lands on a jellyfin page instead of the launcher. Jumping by the
-            // number of entries added since load clears the whole app in one go.
+            // lands on a jellyfin page instead of the launcher. Jumping over
+            // everything the app added clears it in one go.
             try {
                 if (!window.history) {
                     console.warn('tizen-adapter: no way to exit, window.history is unavailable');
                     return;
                 }
 
+                var routerIndexNow = readRouterIndex();
                 var added = 0;
-                if (typeof window.history.length === 'number' && HISTORY_DEPTH_AT_LOAD > 0) {
+                var source = 'none';
+
+                if (ROUTER_INDEX_AT_LOAD !== null && routerIndexNow !== null) {
+                    added = routerIndexNow - ROUTER_INDEX_AT_LOAD;
+                    source = 'router';
+                } else if (typeof window.history.length === 'number' && HISTORY_DEPTH_AT_LOAD > 0) {
                     added = window.history.length - HISTORY_DEPTH_AT_LOAD;
+                    source = 'length';
                 }
 
-                // history.go(-n) needs n entries to actually exist. Guarding on
-                // `added` rather than trusting the arithmetic keeps a negative or
-                // zero value (a browser that caps history.length, or an exit
-                // before any navigation) on the plain single-step path.
+                // Logged because this cannot be reproduced off the TV: the same
+                // code returns to the launcher in a desktop browser, so if it
+                // fails again these three numbers are what identifies why.
+                console.log('tizen-adapter: exit via ' + source
+                    + ' (router ' + ROUTER_INDEX_AT_LOAD + '->' + routerIndexNow
+                    + ', length ' + HISTORY_DEPTH_AT_LOAD + '->' + window.history.length
+                    + ', jumping ' + -(added + 1) + ')');
+
+                // A negative or zero count means the reading is not trustworthy
+                // (a browser that caps history.length, or an exit before any
+                // navigation), so fall back to a single step rather than
+                // computing a jump that lands nowhere and leaves the user stuck.
                 if (added > 0 && typeof window.history.go === 'function') {
                     window.history.go(-(added + 1));
                     return;

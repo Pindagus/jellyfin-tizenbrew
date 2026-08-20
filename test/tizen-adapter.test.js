@@ -23,12 +23,23 @@ function loadAdapter({ history } = {}) {
 // so the module starts one entry deep. Navigating pushes entries the way a
 // single-page app does, and back()/go() move through them, so a test can assert
 // where the user ends up rather than which method was called.
-function createFakeHistory({ entriesBeforeModule = 1 } = {}) {
+//
+// Entries carry a router index the way react-router does: 0 on the entry the app
+// started on, incremented per push. Entries that predate the app have none,
+// which is what makes the count meaningful. `withRouterState: false` models a
+// browser where history.state never arrives, so the fallback gets exercised.
+function createFakeHistory({ entriesBeforeModule = 1, withRouterState = true } = {}) {
     const entries = [];
     for (let i = 0; i < entriesBeforeModule; i++) {
-        entries.push(i === entriesBeforeModule - 1 ? 'launcher' : `outside-${i}`);
+        entries.push({
+            name: i === entriesBeforeModule - 1 ? 'launcher' : `outside-${i}`,
+            state: null
+        });
     }
-    entries.push('module:/home');
+    entries.push({
+        name: 'module:/home',
+        state: withRouterState ? { idx: 0 } : null
+    });
 
     let index = entries.length - 1;
 
@@ -36,10 +47,18 @@ function createFakeHistory({ entriesBeforeModule = 1 } = {}) {
         get length() {
             return entries.length;
         },
-        push(entry) {
+        get state() {
+            return entries[index].state;
+        },
+        push(name) {
+            const previous = entries[index].state;
+            const nextIdx = previous && typeof previous.idx === 'number' ? previous.idx + 1 : null;
             index += 1;
             entries.length = index;
-            entries.push(entry);
+            entries.push({
+                name,
+                state: withRouterState && nextIdx !== null ? { idx: nextIdx } : null
+            });
         },
         go(delta) {
             index = Math.max(0, Math.min(entries.length - 1, index + delta));
@@ -48,7 +67,7 @@ function createFakeHistory({ entriesBeforeModule = 1 } = {}) {
             this.go(-1);
         },
         currentEntry() {
-            return entries[index];
+            return entries[index].name;
         }
     };
 }
@@ -242,6 +261,37 @@ describe('tizen-adapter', () => {
             for (let i = 0; i < 12; i++) {
                 history.push(`module:/details/${i}`);
             }
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('returns to the launcher when history.state carries no router index', () => {
+            // Not every browser hands back the state object react-router writes.
+            // Without it the adapter has to fall back to history.length rather
+            // than compute a jump from a missing number and strand the user.
+            const history = createFakeHistory({ withRouterState: false });
+            const local = loadAdapter({ history });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('returns to the launcher when the launcher itself sits deep in history', () => {
+            // The TizenBrew launcher has its own routes (module manager,
+            // settings), so it can have pushed entries of its own before
+            // handing over. Counting the app's own navigation rather than the
+            // whole stack is what keeps the jump correct here.
+            const history = createFakeHistory({ entriesBeforeModule: 4 });
+            const local = loadAdapter({ history });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
 
             local.tizen.application.getCurrentApplication().exit();
 
