@@ -29,6 +29,30 @@ That leniency could ship a package that looks complete but does not start, so
 not run on the TV. It checks content rather than mere presence: an empty wrapper
 or a `package.json` missing its TizenBrew fields is caught before publishing.
 
+## Leaving the app
+
+`appHost.exit()` has to return to the TizenBrew launcher, which turns out to be
+the hardest thing the adapter does. TizenBrew launches a module with
+`location.href` and offers nothing to reverse it: no global on `window`, no
+postMessage listener, no WebSocket event. The launcher is widget-local content,
+so navigating to its path over HTTP reaches the module's own proxy instead and
+renders a bare IP address.
+
+Walking back through history is the only route, and it has to cover every entry
+jellyfin-web added, since a single-page app pushes one per view. Three things
+about the TV rule out the shorter ways of writing that, each established by
+testing on the device rather than by reasoning:
+
+- `history.go(-n)` is ignored outright. It fails silently, which is worse than
+  useless: the user is left with no way out of the app at all.
+- `history.state.idx`, react-router's own position counter, is not set yet. The
+  adapter replaces `webapis.js` and so runs before jellyfin-web boots.
+- No launcher hook exists on `window` to defer to.
+
+What remains is `history.length` measured at load, and one `back()` per entry
+with a short pause between them, because navigation does not complete
+synchronously. Anything cleverer was tried and reverted.
+
 ## Building locally
 
 ```bash

@@ -80,9 +80,6 @@ loading on a TV, so a broken build fails in CI rather than on your television.
 - No DRM, so Netflix-style protected content will not play. TizenBrew does not
   request the `drmplay` privilege.
 - Hardware decoding has not been compared against a sideloaded `.wgt`.
-- Exiting returns to the TizenBrew launcher by stepping back in history. This
-  route comes from reading TizenBrew's source rather than a documented API, and
-  has not yet been confirmed on real hardware.
 
 ## Contributing
 
