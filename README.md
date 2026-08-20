@@ -1,171 +1,96 @@
 # Jellyfin for TizenBrew
 
-Runs the Jellyfin web client on a Samsung Tizen TV through
-[TizenBrew](https://github.com/reisxd/TizenBrew), without a sideloaded `.wgt` and
-without a developer certificate that expires every 90 days.
+A simple way to install Jellyfin on a Samsung TV and keep it up to date.
+
+Getting Jellyfin onto a Tizen TV normally means building a `.wgt`, installing
+Tizen Studio, putting the TV in developer mode and pushing the build over the
+network. Then the certificate expires after 90 days and you do it again. This
+package skips all of that: install it once through
+[TizenBrew](https://github.com/reisxd/TizenBrew), and updates arrive the same
+way every other TizenBrew module does.
+
+Built on the shoulders of
+[jeppevinkel/jellyfin-tizen-builds](https://github.com/jeppevinkel/jellyfin-tizen-builds),
+whose build scripts showed how to get jellyfin-web running on Tizen in the first
+place, and
+[GlenLowland/jellyfin-tizen-npm-publish](https://github.com/GlenLowland/jellyfin-tizen-npm-publish),
+which did this for TizenBrew before and has been unmaintained since 2024.
 
 ## Installation
 
-Open TizenBrew on the TV, press the green button, choose to add via NPM and enter:
+Requires [TizenBrew](https://github.com/reisxd/TizenBrew) on the TV. Follow their
+installation instructions first.
+
+In TizenBrew, add a module via NPM and enter:
 
 ```
 @pindagus/jellyfin-tizenbrew
 ```
 
-That always resolves to the newest release.
+Jellyfin then appears in the TizenBrew module list.
 
-> **No release yet.** Only development builds exist so far. npm insists on
-> pointing `latest` at something, so an unqualified install currently returns
-> one of those. The first release fixes this for good.
+## Which jellyfin-web version you get
 
-### Development builds
+This package ships the official Jellyfin web client unchanged, so which version
+you run is what matters for talking to your server. Every release states the
+jellyfin-web version it carries, in its
+[release notes](https://github.com/Pindagus/jellyfin-tizenbrew/releases) and on
+the [npm page](https://www.npmjs.com/package/@pindagus/jellyfin-tizenbrew).
 
-Development builds are published under the `dev` dist-tag:
+Check that against your own server: Jellyfin's own compatibility rules apply,
+not anything this package adds. Releases follow jellyfin-web closely, so the
+newest one generally suits a current server.
 
-```
-@pindagus/jellyfin-tizenbrew@dev
-```
+## Updates
 
-Enter that once and it keeps pointing at the newest one. They are semver
-prereleases, so they never satisfy an unqualified install, and they can be
-broken at any moment.
+New versions arrive through TizenBrew. Nothing needs reinstalling.
 
-### Staying on a specific build
-
-Any published version can be entered directly and will never move, which is how
-to go back when a release misbehaves:
+To go back when a release misbehaves, or to stay on a version that matches an
+older server, enter a specific version, which never moves:
 
 ```
 @pindagus/jellyfin-tizenbrew@1.2.3
 ```
 
-The release notes say which jellyfin-web each version carries.
+### Testing upcoming versions
 
-## How it works
-
-Nothing from Jellyfin is vendored. Every build clones fresh, at the versions
-`versions.json` pins:
-
-- `jellyfin/jellyfin-web` at a release tag
-- `jellyfin/jellyfin-tizen`, the official Tizen wrapper, at a commit
-
-Pinning rather than always taking the newest is what makes an old release
-reproducible. A daily workflow proposes new pins by pull request, so upstream
-changes still arrive on their own, but only after passing through a build you
-can test.
-
-The only project-owned code is `tizen-adapter.js`. The wrapper normally loads
-`$WEBAPIS/webapis/webapis.js`, a placeholder that only resolves inside an installed
-`.wgt`. That path does not exist in TizenBrew, so the build replaces the reference
-with our adapter, which mimics the Tizen APIs the wrapper actually uses.
-
-The patches deliberately warn instead of failing when upstream renames something, so
-that a rename does not break the whole pipeline. To keep that from shipping a package
-that looks complete but does not start, `scripts/verify-build.sh` inspects the result
-and fails the build if it would not run on the TV. It checks content rather than mere
-presence, so an empty wrapper or a `package.json` missing its TizenBrew fields is
-caught before publishing.
-
-## Versioning
-
-Versions are decided by semantic-release from the commit history, not by anyone
-typing a number. Conventional-commit types map onto the bump: `fix` gives a
-patch, `feat` a minor, and a `!` or `BREAKING CHANGE` a major.
-
-The version number says nothing about which jellyfin-web is inside; npm offers
-no way to encode that. What a release contains is recorded in its `package.json`
-as `jellyfinWeb` (a version) and `jellyfinTizen` (a commit, since that
-repository publishes no versions at all). Nothing from Jellyfin is vendored, so
-those two fields are the only record of what a build was made from, and
-`versions.json` pins what the next one will use.
-
-### How a release happens
+Development builds are published under the `dev` tag:
 
 ```
-daily check finds jellyfin-web 10.12.0
-  -> pull request on dev: "feat: bump jellyfin-web v10.11.11 to v10.12.0"
-  -> you merge it
-  -> 1.1.0-dev.1 published to the npm dev dist-tag
-  -> you test it on the TV
-  -> you promote dev to main
-  -> 1.1.0 published to latest, with a GitHub release and notes
+@pindagus/jellyfin-tizenbrew@dev
 ```
 
-The check writes the commit type to match how far upstream moved, so a
-jellyfin-web minor arrives as `feat` and becomes a minor here. Editing the
-commit subject before merging changes that, which is how a release gets a
-bigger number than upstream alone would justify.
+These have not been tried on a TV yet and can be broken at any moment. Use the
+normal package unless you are helping to test something.
 
-Your own commits work the same way: a `fix:` on dev is a patch, a `feat:` is a
-minor. Commits that release nothing (`docs`, `chore`, `style`) build and verify
-but publish nothing, which is the intended outcome rather than a failure.
+## What this actually installs
 
-Prereleases are numbered `1.1.0-dev.1`, `1.1.0-dev.2` and so on. They never
-satisfy an unqualified install, which is what keeps them off `latest` while
-remaining installable as `@dev`.
+Nothing from Jellyfin is copied into this repository. Each release is built by
+cloning the official [jellyfin-web](https://github.com/jellyfin/jellyfin-web)
+and [jellyfin-tizen](https://github.com/jellyfin/jellyfin-tizen) at pinned
+versions and adapting them to run inside TizenBrew. The only code written here
+is a small adapter that stands in for the Tizen APIs the official wrapper
+expects.
 
-## Supported servers
-
-One build covers both current Jellyfin server lines. jellyfin-web declares the
-oldest server it will talk to (`MINIMUM_VERSION` in `@jellyfin/sdk`), currently
-`10.10.0`, and refuses to connect below it rather than degrading quietly. A
-build against jellyfin-web 10.11 therefore serves servers on 10.10 and 10.11
-alike, which is why there is no separate 10.10 package.
-
-The build checks that constant on every run and warns when upstream raises it,
-since that is the point where users on older servers would be stranded and a
-second package pinned to the previous jellyfin-web becomes worth publishing.
-
-## Branches
-
-- `main`: releasable. Landing here publishes to the `latest` dist-tag.
-- `dev`: where work and upstream bumps land, published as prereleases to `@dev`.
-
-## Building locally
-
-```bash
-npm install
-npm test
-npm run build
-```
-
-Without a build having run, `npm test` skips the package-metadata tests (there is
-nothing in `dist-build/` yet to check). Run `REQUIRE_DIST_BUILD=1 npm test` to make
-those tests fail hard instead of skipping when the build is missing, which is
-exactly what CI does.
-
-The output goes into `dist-build/`. `npm run build` invokes `scripts/build.sh`,
-which ends by running `scripts/verify-build.sh`; the build fails if verification
-does not pass.
-
-A local build is versioned `0.0.0-local`. The real number is decided after the
-build, by semantic-release, which then calls `scripts/set-version.sh` to write it
-into the manifest and the adapter. Run that script by hand to see what a given
-version would produce.
-
-## Contributing
-
-Patches on top of upstream are `patch_file` calls in `scripts/build.sh`. Each patch
-warns instead of failing when upstream renames the target pattern, so an upstream
-change does not break the build, but does become visible in the build log.
-
-Parts of this project were developed with AI assistance.
+Every build is checked before publishing for the things that would stop it
+loading on a TV, so a broken build fails in CI rather than on your television.
 
 ## Known limitations
 
-- No DRM. TizenBrew does not request the `drmplay` privilege.
-- Hardware decoding has not been compared against a real sideloaded `.wgt`.
-- Exiting steps back in history to reach the TizenBrew launcher. The launcher is
-  widget-local content rather than something served over HTTP, so it cannot be
-  reached by URL from the module. This route is derived from TizenBrew's own source
-  rather than a documented API, and has not yet been confirmed on hardware.
+- No DRM, so Netflix-style protected content will not play. TizenBrew does not
+  request the `drmplay` privilege.
+- Hardware decoding has not been compared against a sideloaded `.wgt`.
+- Exiting returns to the TizenBrew launcher by stepping back in history. This
+  route comes from reading TizenBrew's source rather than a documented API, and
+  has not yet been confirmed on real hardware.
 
-## Related work
+## Contributing
 
-- [jeppevinkel/jellyfin-tizen-builds](https://github.com/jeppevinkel/jellyfin-tizen-builds): `.wgt` builds to sideload. Use that if you are not running TizenBrew.
-- [GlenLowland/jellyfin-tizen-npm-publish](https://github.com/GlenLowland/jellyfin-tizen-npm-publish): the previous TizenBrew package, unmaintained since 2024.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how builds, versioning and releases
+work.
+
+Parts of this project were developed with AI assistance.
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE), matching the license of upstream
-`jellyfin-tizen`.
+[Mozilla Public License 2.0](LICENSE), matching upstream `jellyfin-tizen`.
