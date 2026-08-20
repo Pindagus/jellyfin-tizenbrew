@@ -1,3 +1,5 @@
 {
-  "lastBuiltWebTag": "v10.11.11"
+  "_comment": "What every build clones. Nothing from Jellyfin is vendored, so these pins are what make a release reproducible: rebuilding an old tag has to produce the same package. The update workflow proposes changes here by pull request; merging one triggers a prerelease to test.",
+  "jellyfinWeb": "v10.11.11",
+  "jellyfinTizen": "31408c121e34e73c9f50c4e201c05e95140675df"
 }

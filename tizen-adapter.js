@@ -4,9 +4,41 @@
 // used by a packaged .wgt does not resolve.
 (function () {
     // Replaced by the build workflow. MODULE_VERSION is our own semver for this
-    // package, WEB_VERSION is the jellyfin-web version being bundled.
+    // package, WEB_VERSION is the jellyfin-web version being bundled, and
+    // TIZEN_COMMIT is the jellyfin-tizen commit it was built from (that
+    // repository publishes no versions, so a commit is all there is to name).
     var MODULE_VERSION = 'DEVELOPMENT';
     var WEB_VERSION = 'DEVELOPMENT';
+    var TIZEN_COMMIT = 'DEVELOPMENT';
+
+    // How deep the history was when this module loaded, captured before
+    // jellyfin-web has navigated anywhere. Exiting means walking back to this
+    // depth, so it has to be read now rather than on exit.
+    //
+    // react-router keeps a more precise position in history.state.idx, but it
+    // writes that when jellyfin-web boots. This adapter replaces webapis.js and
+    // therefore runs first, so that value is always null here: confirmed on the
+    // TV, where every exit reported "length" rather than "router".
+    var HISTORY_DEPTH_AT_LOAD = (window.history && typeof window.history.length === 'number')
+        ? window.history.length
+        : 0;
+
+    // Walks back one entry at a time. Each step waits for the previous one,
+    // because navigation does not complete synchronously and firing them in a
+    // loop would collapse into a single step.
+    function stepBack(remaining) {
+        if (remaining <= 0 || !window.history || typeof window.history.back !== 'function') {
+            return;
+        }
+
+        window.history.back();
+
+        if (remaining > 1 && typeof window.setTimeout === 'function') {
+            window.setTimeout(function () {
+                stepBack(remaining - 1);
+            }, 120);
+        }
+    }
 
     var currentApplication = {
         appInfo: {
@@ -16,34 +48,47 @@
         },
         exit: function () {
             // TizenBrew hosts this module with a full page navigation (no iframe):
-            // its launcher does `location.href = <module url>` (tizenbrew-ui/src/
-            // components/Modules.jsx), which destroys the launcher's own JS context
-            // along with its Return-key handler. There is no widget of our own to
-            // close and no postMessage or WebSocket event the service accepts for
-            // returning to the launcher.
+            // its launcher does `location.href = module.appPath` (tizenbrew-ui/
+            // src/components/Modules.jsx:33), which destroys the launcher's own JS
+            // context along with its Return-key handler. TizenBrew exposes no API
+            // for returning to it: no global object on window, no postMessage
+            // listener, and the service's WebSocket accepts no close-module event.
             //
-            // The launcher itself is widget-local content, not something served
-            // over HTTP: config.xml declares `<content src="tizenbrew-ui/dist/
-            // index.html"/>`. Navigating to that path as a URL therefore does NOT
-            // reach it. The module runs on 127.0.0.1:8081, whose proxy answers
-            // anything outside /module/ with a bare IP address as plain text,
-            // which is what produced a black screen on the TV.
+            // The launcher is widget-local content, not something served over
+            // HTTP: config.xml declares `<content src="tizenbrew-ui/dist/
+            // index.html"/>`. Navigating there by URL therefore does NOT reach it.
+            // The module runs on 127.0.0.1:8081, whose proxy answers anything
+            // outside /module/ with a bare IP address as plain text, which is what
+            // produced a black screen on the TV.
             //
-            // Because the launcher navigated with location.href rather than
-            // location.replace, its page is still the previous history entry, so
-            // going back returns to it without involving the proxy at all.
+            // Going back is the only route, and it has to cover every entry
+            // jellyfin-web added: it is a single-page app that pushes one per
+            // view, so a single back() from the settings page lands on another
+            // jellyfin page instead of the launcher.
+            //
+            // Deliberately not history.go(-n), which would express this in one
+            // call: the TV's browser engine ignores a multi-step jump outright,
+            // leaving the app impossible to leave. Stepping back one entry at a
+            // time relies only on back(), which does work there. Both were
+            // measured on the device.
             try {
-                if (window.tizenbrew && typeof window.tizenbrew.exit === 'function') {
-                    window.tizenbrew.exit();
+                if (!window.history || typeof window.history.back !== 'function') {
+                    console.warn('tizen-adapter: no way to exit, history.back is unavailable');
                     return;
                 }
 
-                if (window.history && typeof window.history.back === 'function') {
-                    window.history.back();
-                    return;
+                var depthNow = (typeof window.history.length === 'number')
+                    ? window.history.length
+                    : HISTORY_DEPTH_AT_LOAD;
+                var added = (HISTORY_DEPTH_AT_LOAD > 0)
+                    ? depthNow - HISTORY_DEPTH_AT_LOAD
+                    : 0;
+                if (added < 0) {
+                    added = 0;
                 }
 
-                console.warn('tizen-adapter: no way to exit, window.history is unavailable');
+                // One step per entry the app added, plus the one that led here.
+                stepBack(added + 1);
             } catch (err) {
                 console.warn('tizen-adapter: exit failed', err);
             }
@@ -112,6 +157,7 @@
     function buildVersionRows() {
         return [
             { label: 'jellyfin-web', value: WEB_VERSION },
+            { label: 'jellyfin-tizen', value: TIZEN_COMMIT },
             { label: 'Module', value: MODULE_VERSION },
             { label: 'Project', value: 'github.com/Pindagus/jellyfin-tizenbrew' }
         ];

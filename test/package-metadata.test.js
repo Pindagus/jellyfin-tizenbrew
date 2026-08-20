@@ -34,6 +34,30 @@ describe('TizenBrew package metadata', () => {
         expect(pkg.name).toBe('@pindagus/jellyfin-tizenbrew');
     });
 
+    it.skipIf(!requireBuild && !existsSync(METADATA_PATH))('records what upstream code the release contains', () => {
+        const pkg = readMetadata();
+
+        // Nothing from Jellyfin is vendored, so these two fields are the only
+        // record of what a release was built from. CI also reads them back off
+        // the registry to size the next version bump and to decide whether
+        // upstream moved at all. Losing one fails no build; it silently
+        // degrades every future release to a patch and makes the update check
+        // rebuild forever, so both are asserted here.
+        expect(pkg.jellyfinWeb).toMatch(/^\d+\.\d+\.\d+/);
+        expect(pkg.jellyfinTizen).toMatch(/^[0-9a-f]{7,40}$/);
+    });
+
+    it.skipIf(!requireBuild && !existsSync(METADATA_PATH))('points at the repository provenance is signed against', () => {
+        const pkg = readMetadata();
+
+        // Releases publish over trusted publishing, which attaches a provenance
+        // statement and makes npm compare this field against the repository the
+        // workflow ran in. A mismatch is not a warning: the upload is rejected
+        // with E422 after the build has already succeeded, which is how the
+        // first release attempt failed.
+        expect(pkg.repository?.url).toBe('git+https://github.com/Pindagus/jellyfin-tizenbrew.git');
+    });
+
     it.skipIf(!requireBuild && !existsSync(METADATA_PATH))('registers the media keys the wrapper uses', () => {
         const pkg = readMetadata();
 

@@ -1,34 +1,38 @@
-name: Build package
+name: Build and release
+
+# semantic-release decides everything about the version: it reads the commit
+# history since the last release and maps conventional-commit types onto a bump
+# (fix -> patch, feat -> minor, ! or BREAKING CHANGE -> major). Landing on dev
+# publishes a prerelease to the npm "dev" dist-tag; landing on main publishes a
+# release to "latest" and opens a GitHub Release with generated notes.
+#
+# main is deliberately not in the push trigger yet: it still carries untested
+# work. This trigger arrives on main with the pull request that promotes dev,
+# which is the point at which main becomes releasable.
 
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
     inputs:
       web_tag:
-        description: 'jellyfin-web tag to build (default: latest release)'
+        description: 'jellyfin-web tag to build (default: the pin in versions.json)'
         required: false
         default: ''
         type: string
-      publish_npm:
-        description: 'Publish to npm'
+      dry_run:
+        description: 'Build and verify without publishing anything'
         required: false
-        default: 'no'
-        type: choice
-        options:
-          - 'no'
-          - 'dev'
-          - 'release'
-  workflow_call:
-    inputs:
-      web_tag:
-        required: true
-        type: string
-      publish_npm:
-        required: false
-        default: 'no'
-        type: string
+        default: true
+        type: boolean
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
+  # npm trusted publishing swaps this short-lived OIDC token for publish rights,
+  # so no long-lived NPM_TOKEN secret has to exist in this repository.
+  id-token: write
 
 jobs:
   build:
@@ -37,6 +41,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # semantic-release reads the commit history to work out the bump, and
+          # the default shallow clone hides all but the newest commit.
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -47,12 +56,15 @@ jobs:
       - name: Resolve jellyfin-web tag
         id: resolve
         run: |
+          # versions.json is the pin, so rebuilding an old release reproduces
+          # what that release shipped rather than picking up whatever is newest.
+          # The input only overrides it for trying a version out by hand.
           TAG="${{ inputs.web_tag }}"
           if [ -z "${TAG}" ]; then
-            TAG="$(curl -sS https://api.github.com/repos/jellyfin/jellyfin-web/releases/latest | jq -r .tag_name)"
+            TAG="$(jq -r '.jellyfinWeb // empty' versions.json)"
           fi
           if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
-            echo "could not resolve a jellyfin-web tag" >&2
+            echo "could not resolve a jellyfin-web tag from versions.json" >&2
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -106,9 +118,6 @@ jobs:
       - name: Build package
         env:
           PACKAGE_VERSION: ${{ steps.resolve.outputs.tag }}
-          # Only a dev publish needs the prerelease suffix. A release keeps the
-          # bare MODULE_VERSION so it lands on the "latest" dist-tag.
-          DEV_BUILD_ID: ${{ inputs.publish_npm == 'dev' && github.run_number || '' }}
         run: |
           # Strip a leading v so the npm version stays semver-clean.
           export PACKAGE_VERSION="${PACKAGE_VERSION#v}"
@@ -123,68 +132,90 @@ jobs:
           REQUIRE_DIST_BUILD: 1
         run: npx vitest run test/package-metadata.test.js
 
-      - name: Push to dist branch
-        run: |
-          cd dist-build
-          git init -q
-
-          # `git init` here creates a brand new, separate repo, it does not
-          # inherit any identity set in the checked-out main repo above it.
-          # The identity must be configured inside this new repo, not
-          # --global, so it stays scoped to this throwaway dist checkout.
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          git checkout -q -b dist
-          git add -A
-          git commit -q -m "build: jellyfin-web ${{ steps.resolve.outputs.tag }}"
-          git push -q --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            dist
-
-      - name: Record the built version
-        run: |
-          # This step commits to the checked-out main repo, which is a
-          # separate repo from the dist-build/ checkout above and needs its
-          # own identity here too.
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          jq --arg tag "${{ steps.resolve.outputs.tag }}" \
-            '.lastBuiltWebTag = $tag' versions.json > versions.tmp
-          mv versions.tmp versions.json
-
-          git add versions.json
-          if git diff --cached --quiet; then
-            echo "versions.json unchanged, nothing to record"
-          else
-            git commit -m "chore: 🔧 record built jellyfin-web ${{ steps.resolve.outputs.tag }}"
-            git push
-          fi
-
-      - name: Publish to npm
-        if: inputs.publish_npm == 'dev' || inputs.publish_npm == 'release'
-        working-directory: dist-build
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN is not set in the repository secrets" >&2
-            exit 1
-          fi
-
-          # A dev build goes out under its own dist-tag so an unqualified
-          # install keeps resolving to the last release. Publishing a
-          # prerelease without --tag would still leave "latest" alone, but
-          # naming it explicitly is what makes @dev installable.
-          if [ "${{ inputs.publish_npm }}" = 'dev' ]; then
-            DIST_TAG=dev
-            npm publish --access public --tag dev
-          else
-            DIST_TAG=latest
-            npm publish --access public
-          fi
-
-          # Report what the tag actually resolves to, so the log shows the
-          # published version rather than merely that the command exited 0.
-          npm view "@pindagus/jellyfin-tizenbrew@${DIST_TAG}" version
+      - name: Release
+        id: release
+        if: inputs.dry_run != true
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # No NPM_TOKEN: authentication comes from the OIDC token the id-token
+          # permission grants, matched against the trusted publisher configured
+          # on the package (owner, repo and this workflow's filename).
+          #
+          # This is also the step that decides whether anything gets published
+          # at all. A run whose commits carry no releasable type (docs, chore,
+          # style) ends here without a release, which is the intended outcome
+          # rather than a failure.
+          npx semantic-release
+
+          # The purge step needs to know whether anything was actually
+          # published, and on which dist-tag. Reading it back from the manifest
+          # semantic-release just wrote is more reliable than parsing its log.
+          if [ -f dist-build/package.json ]; then
+            PUBLISHED="$(jq -r '.version' dist-build/package.json)"
+            if [ "${PUBLISHED}" != "0.0.0-local" ] && [ -n "${PUBLISHED}" ]; then
+              echo "version=${PUBLISHED}" >> "$GITHUB_OUTPUT"
+              case "${PUBLISHED}" in
+                *-dev.*) echo "tag=dev" >> "$GITHUB_OUTPUT" ;;
+                *)       echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
+              esac
+            fi
+          fi
+
+      # jsDelivr caches a dist-tag on its edge for 12 hours, because the tag can
+      # move. TizenBrew fetches modules straight from jsDelivr and caches nothing
+      # itself, so without this a TV installing @dev keeps getting the previous
+      # build for up to half a day. Pinned versions are immutable and unaffected.
+      #
+      # Only the files this project actually changes are purged: www/ carries the
+      # jellyfin-web build, and jsDelivr purges per file, so listing all 1218
+      # would be slow and pointless. One request covers the whole list.
+      #
+      # continue-on-error because the package is already published by this point.
+      # A failed purge means a slow rollout, never a failed release.
+      - name: Refresh the jsDelivr cache for the published tag
+        if: inputs.dry_run != true && steps.release.outputs.tag != ''
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          PKG="@pindagus/jellyfin-tizenbrew"
+          PATHS="$(printf '"/npm/%s@%s/%s",' \
+            "${PKG}" "${TAG}" "package.json" \
+            "${PKG}" "${TAG}" "tizen-adapter.js" \
+            "${PKG}" "${TAG}" "tizen.js" \
+            "${PKG}" "${TAG}" "index.html" \
+            "${PKG}" "${TAG}" "README.md" \
+            "${PKG}" "${TAG}" "www/index.html" | sed 's/,$//')"
+
+          RESPONSE="$(curl -sS -X POST "https://purge.jsdelivr.net/" \
+            -H "Content-Type: application/json" \
+            -d "{\"path\":[${PATHS}]}")"
+
+          echo "${RESPONSE}"
+
+          # A purge is queued, not instant, so report the outcome rather than
+          # assuming it worked: a throttled request still returns an id.
+          PURGE_ID="$(echo "${RESPONSE}" | jq -r '.id // empty')"
+          if [ -z "${PURGE_ID}" ]; then
+            echo "::warning::jsDelivr did not accept the purge; @${TAG} will refresh on its own within 12 hours"
+            exit 0
+          fi
+
+          for _ in $(seq 1 20); do
+            STATUS="$(curl -sS "https://purge.jsdelivr.net/status/${PURGE_ID}" | jq -r '.status // empty')"
+            [ "${STATUS}" = "finished" ] && break
+            sleep 3
+          done
+
+          if [ "${STATUS}" = "finished" ]; then
+            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on @${TAG}"
+          else
+            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; @${TAG} will refresh on its own within 12 hours"
+          fi
+
+      - name: Report what a release would do
+        if: inputs.dry_run == true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release --dry-run

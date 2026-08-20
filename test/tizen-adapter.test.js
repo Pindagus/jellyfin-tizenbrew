@@ -5,11 +5,56 @@ const adapterSource = readFileSync(new URL('../tizen-adapter.js', import.meta.ur
 
 // The adapter is an IIFE that assigns to window. Evaluate it against a fake window
 // so each test starts from a clean slate.
-function loadAdapter() {
+//
+// `history` is accepted because the adapter reads history.length at load time to
+// work out how far back the launcher sits; tests that exercise exit have to be
+// able to set that starting depth.
+function loadAdapter({ history, setTimeout: fakeSetTimeout } = {}) {
     const win = { screen: { width: 1920, height: 1080 } };
+    if (history) {
+        win.history = history;
+    }
+    // Exit walks back one entry per timer tick, so without a setTimeout only the
+    // first step would run. Executing callbacks immediately keeps the assertions
+    // about where the user ends up, rather than about how many timers fired.
+    win.setTimeout = fakeSetTimeout || ((fn) => { fn(); });
     const fn = new Function('window', adapterSource);
     fn(win);
     return win;
+}
+
+// Simulates TizenBrew's history: the launcher navigated here with location.href,
+// so the module starts one entry deep. Navigating pushes entries the way a
+// single-page app does, and back() moves through them, so a test can assert
+// where the user ends up rather than which method was called.
+function createFakeHistory({ entriesBeforeModule = 1 } = {}) {
+    const entries = [];
+    for (let i = 0; i < entriesBeforeModule; i++) {
+        entries.push(i === entriesBeforeModule - 1 ? 'launcher' : `outside-${i}`);
+    }
+    entries.push('module:/home');
+
+    let index = entries.length - 1;
+
+    return {
+        get length() {
+            return entries.length;
+        },
+        push(name) {
+            index += 1;
+            entries.length = index;
+            entries.push(name);
+        },
+        go(delta) {
+            index = Math.max(0, Math.min(entries.length - 1, index + delta));
+        },
+        back() {
+            this.go(-1);
+        },
+        currentEntry() {
+            return entries[index];
+        }
+    };
 }
 
 // Minimal fake element supporting only what injectVersionInfo touches:
@@ -160,45 +205,127 @@ describe('tizen-adapter', () => {
         expect(win.webapis.productinfo.isUdPanelSupported()).toBe(true);
     });
 
-    it('goes back in history on exit rather than navigating by URL', () => {
-        // The launcher lives at a widget-local path (config.xml <content src=...>),
-        // not on the module's 127.0.0.1:8081 origin, so navigating to it by URL hits
-        // the proxy and renders a bare IP address. Going back reuses the history
-        // entry the launcher's own location.href navigation left behind.
-        let wentBack = false;
-        win.location = { href: 'http://127.0.0.1:8081/module/x/www/index.html' };
-        win.history = { back: () => { wentBack = true; } };
+    describe('exit', () => {
+        // These assert where the user ends up, not which history method ran. An
+        // earlier version checked only that back() was called, which stayed green
+        // while exiting from the settings page landed on a jellyfin page on a real
+        // TV instead of returning to TizenBrew.
 
-        const app = win.tizen.application.getCurrentApplication();
-        app.exit();
+        it('returns to the launcher when exiting without having navigated', () => {
+            const history = createFakeHistory();
+            const local = loadAdapter({ history });
+            local.location = { href: 'http://127.0.0.1:8081/module/x/www/index.html' };
 
-        expect(wentBack).toBe(true);
-        expect(win.location.href).toBe('http://127.0.0.1:8081/module/x/www/index.html');
-    });
+            local.tizen.application.getCurrentApplication().exit();
 
-    it('prefers an explicit TizenBrew exit hook over the history fallback', () => {
-        let wentBack = false;
-        let called = false;
-        win.history = { back: () => { wentBack = true; } };
-        win.tizenbrew = { exit: () => { called = true; } };
+            expect(history.currentEntry()).toBe('launcher');
+            // Navigating by URL would hit the proxy, which serves a bare IP
+            // address outside /module/ and renders as a black screen.
+            expect(local.location.href).toBe('http://127.0.0.1:8081/module/x/www/index.html');
+        });
 
-        const app = win.tizen.application.getCurrentApplication();
-        app.exit();
+        it('returns to the launcher after jellyfin-web has pushed history entries', () => {
+            // The reported failure: visit settings, go back to home via the UI,
+            // then exit. jellyfin-web pushes an entry per view, so a single
+            // back() would land on the previous jellyfin page.
+            const history = createFakeHistory();
+            const local = loadAdapter({ history });
 
-        expect(called).toBe(true);
-        // The fallback must not also run when the hook succeeds.
-        expect(wentBack).toBe(false);
-    });
+            history.push('module:/usersettings');
+            history.push('module:/home');
 
-    it('warns instead of throwing when exit has no usable mechanism', () => {
-        win.history = undefined;
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            local.tizen.application.getCurrentApplication().exit();
 
-        const app = win.tizen.application.getCurrentApplication();
-        expect(() => app.exit()).not.toThrow();
-        expect(warnSpy).toHaveBeenCalled();
+            expect(history.currentEntry()).toBe('launcher');
+        });
 
-        warnSpy.mockRestore();
+        it('returns to the launcher from deep inside the app', () => {
+            const history = createFakeHistory();
+            const local = loadAdapter({ history });
+
+            for (let i = 0; i < 12; i++) {
+                history.push(`module:/details/${i}`);
+            }
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('returns to the launcher when the launcher itself sits deep in history', () => {
+            // The TizenBrew launcher has its own routes (module manager,
+            // settings), so it can have pushed entries of its own before
+            // handing over. Counting the app's own navigation rather than the
+            // whole stack is what keeps the jump correct here.
+            const history = createFakeHistory({ entriesBeforeModule: 4 });
+            const local = loadAdapter({ history });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('never calls go(), which the TV ignores outright', () => {
+            // The TV's browser engine accepts back() but silently ignores a
+            // multi-step go(), which is what made the app impossible to leave.
+            // Exit must therefore reach the launcher without go() at all.
+            const history = createFakeHistory();
+            let goCalls = 0;
+            const realGo = history.go.bind(history);
+            history.go = (delta) => {
+                goCalls += 1;
+                realGo(delta);
+            };
+            // back() must not route through the patched go(), or the count
+            // would measure the fake rather than the adapter.
+            history.back = () => { realGo(-1); };
+
+            const local = loadAdapter({ history });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(goCalls).toBe(0);
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('walks back one entry at a time rather than in one jump', () => {
+            const history = createFakeHistory();
+            let backCalls = 0;
+            const realBack = history.back.bind(history);
+            history.back = () => {
+                backCalls += 1;
+                realBack();
+            };
+
+            const local = loadAdapter({ history });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            // Two entries the app added, plus the one that brought it here.
+            expect(backCalls).toBe(3);
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('warns instead of throwing when exit has no usable mechanism', () => {
+            const local = loadAdapter();
+            local.history = undefined;
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const app = local.tizen.application.getCurrentApplication();
+            expect(() => app.exit()).not.toThrow();
+            expect(warnSpy).toHaveBeenCalled();
+
+            warnSpy.mockRestore();
+        });
     });
 
     describe('settings version info injection', () => {
@@ -209,7 +336,7 @@ describe('tizen-adapter', () => {
             expect(doc.getElementById('tizenAdapterVersionInfo')).toBeNull();
         });
 
-        it('injects a block containing both version numbers when the anchor exists', () => {
+        it('injects a block naming every version the build stamps', () => {
             const doc = createFakeDocument({ withAnchor: true });
 
             win.__tizenAdapterInjectVersionInfo(doc);
@@ -218,10 +345,19 @@ describe('tizen-adapter', () => {
             expect(block).not.toBeNull();
 
             const text = block.children.map((row) => row.textContent).join(' | ');
-            // win here was loaded via loadAdapter(), which stamps the
-            // DEVELOPMENT placeholders since no build step ran.
-            expect(text).toContain('DEVELOPMENT');
-            expect(text.match(/DEVELOPMENT/g).length).toBe(2);
+
+            // This block is the only place a user can see what their TV is
+            // running, so every stamped version has to reach it. jellyfin-tizen
+            // was stamped into package.json but not into the adapter, which is
+            // how it went missing from the settings page on a real TV.
+            expect(text).toContain('jellyfin-web');
+            expect(text).toContain('jellyfin-tizen');
+            expect(text).toContain('Module');
+
+            // win here was loaded via loadAdapter(), which leaves the
+            // DEVELOPMENT placeholders since no build step ran: one per
+            // stamped version.
+            expect(text.match(/DEVELOPMENT/g).length).toBe(3);
         });
 
         it('does not inject the block twice on repeat calls', () => {
