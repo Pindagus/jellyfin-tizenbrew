@@ -47,6 +47,17 @@ describe('TizenBrew package metadata', () => {
         expect(pkg.jellyfinTizen).toMatch(/^[0-9a-f]{7,40}$/);
     });
 
+    it.skipIf(!requireBuild && !existsSync(METADATA_PATH))('points at the repository provenance is signed against', () => {
+        const pkg = readMetadata();
+
+        // Releases publish over trusted publishing, which attaches a provenance
+        // statement and makes npm compare this field against the repository the
+        // workflow ran in. A mismatch is not a warning: the upload is rejected
+        // with E422 after the build has already succeeded, which is how the
+        // first release attempt failed.
+        expect(pkg.repository?.url).toBe('git+https://github.com/Pindagus/jellyfin-tizenbrew.git');
+    });
+
     it.skipIf(!requireBuild && !existsSync(METADATA_PATH))('registers the media keys the wrapper uses', () => {
         const pkg = readMetadata();
 

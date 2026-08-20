@@ -144,12 +144,20 @@ WEB_VERSION="${PACKAGE_VERSION:-0.0.0-dev}"
 # publish and, worse, ignores it when comparing, so two builds against different
 # jellyfin-web releases collide as one already-published version. Both upstream
 # versions are recorded as fields instead, which npm does preserve.
+#
+# The repository field is not decoration: publishing over trusted publishing
+# attaches a provenance statement, and npm rejects the upload (E422) unless this
+# field matches the repository the workflow ran in.
 cat > "${OUT}/package.json" <<EOF
 {
   "name": "@pindagus/jellyfin-tizenbrew",
   "version": "${MODULE_VERSION}",
   "description": "Jellyfin for Samsung Smart TV via TizenBrew",
   "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pindagus/jellyfin-tizenbrew.git"
+  },
   "jellyfinWeb": "${WEB_VERSION}",
   "jellyfinTizen": "${TIZEN_COMMIT}",
   "packageType": "app",
