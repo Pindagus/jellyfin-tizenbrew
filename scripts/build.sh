@@ -176,6 +176,44 @@ cat > "${OUT}/package.json" <<EOF
 }
 EOF
 
+# npm renders this on the package page, which is where someone deciding whether
+# a release suits their server looks first. Generated rather than copied from the
+# repository README so it can state the jellyfin-web version this exact build
+# carries, which is the one thing that page has to answer.
+cat > "${OUT}/README.md" <<EOF
+# Jellyfin for TizenBrew
+
+Runs the Jellyfin web client on a Samsung TV through
+[TizenBrew](https://github.com/reisxd/TizenBrew), without sideloading a \`.wgt\`
+or a developer certificate that expires every 90 days.
+
+## This release
+
+| | |
+|---|---|
+| **jellyfin-web** | \`${WEB_VERSION}\` |
+| **jellyfin-tizen** | \`${TIZEN_COMMIT}\` |
+
+The web client is the official build, unchanged. Check that version against your
+own Jellyfin server: Jellyfin's compatibility rules apply, not anything this
+package adds.
+
+## Installation
+
+Requires TizenBrew on the TV. In TizenBrew, add a module via NPM and enter:
+
+\`\`\`
+@pindagus/jellyfin-tizenbrew
+\`\`\`
+
+## Documentation
+
+Installation details, known limitations and how builds work:
+[github.com/Pindagus/jellyfin-tizenbrew](https://github.com/Pindagus/jellyfin-tizenbrew)
+
+Licensed [MPL-2.0](https://github.com/Pindagus/jellyfin-tizenbrew/blob/main/LICENSE).
+EOF
+
 # The jellyfin-web version is known now and never changes afterwards, so it is
 # stamped here. The module version is not: set-version.sh handles that.
 perl -pi -e "s/var WEB_VERSION = 'DEVELOPMENT';/var WEB_VERSION = '${WEB_VERSION}';/" \

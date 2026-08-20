@@ -40,4 +40,5 @@ if [ "${STAMPED}" != "var MODULE_VERSION = '${VERSION}'" ]; then
     exit 1
 fi
 
-echo "set version ${VERSION} in dist-build/"
+WEB="$(jq -r '.jellyfinWeb' "${OUT}/package.json")"
+echo "set version ${VERSION} in dist-build/ (jellyfin-web ${WEB})"

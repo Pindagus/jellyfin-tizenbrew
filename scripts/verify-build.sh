@@ -24,9 +24,15 @@ if ! grep -q 'tizen-adapter.js' "${INDEX}"; then
     fail "index.html does not load tizen-adapter.js"
 fi
 
-for required in "${OUT}/package.json" "${OUT}/tizen-adapter.js" "${OUT}/tizen.js" "${OUT}/index.html"; do
+for required in "${OUT}/package.json" "${OUT}/tizen-adapter.js" "${OUT}/tizen.js" "${OUT}/index.html" "${OUT}/README.md"; do
     [ -f "${required}" ] || fail "missing ${required}"
 done
+
+# The npm page is where someone checks whether a release suits their server, so
+# a README that lost its jellyfin-web version is worse than useless there.
+if [ -f "${OUT}/README.md" ] && ! grep -q '\*\*jellyfin-web\*\*' "${OUT}/README.md"; then
+    fail "README.md does not state the jellyfin-web version"
+fi
 
 # package.json must be valid JSON and carry the TizenBrew fields TizenBrew
 # reads to recognize and launch the module. Presence alone is not enough:
