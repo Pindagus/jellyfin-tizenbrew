@@ -12,48 +12,34 @@ Open TizenBrew on the TV, press the green button, choose to add via NPM and ente
 @pindagus/jellyfin-tizenbrew
 ```
 
-That is the released package and the one to use. It always resolves to the latest
-release, never to a development build.
+That always resolves to the newest release.
 
-> **No release yet.** Only a development build has been published so far, and npm
-> always points `latest` at something, so an unqualified install currently
-> returns that development build. The first real release fixes this for good:
-> from then on `latest` only ever names a release.
+> **No release yet.** Only development builds exist so far. npm insists on
+> pointing `latest` at something, so an unqualified install currently returns
+> one of those. The first release fixes this for good.
 
 ### Development builds
 
-Development builds are published to npm under the `dev` dist-tag:
+Development builds are published under the `dev` dist-tag:
 
 ```
 @pindagus/jellyfin-tizenbrew@dev
 ```
 
-Enter that once and it keeps pointing at the newest development build. Because
-these are semver prereleases, they never satisfy an unqualified install, so the
-line above is the only way to reach them. They can be broken at any moment.
-
-Adding via GitHub instead installs from the `dist` branch, which is rebuilt on
-every run of the build workflow:
-
-```
-Pindagus/jellyfin-tizenbrew@dist
-```
-
-Prefer the `dev` tag over this one. jsDelivr caches branch URLs for around 12
-hours and refreshes files independently of each other, so a freshly built `dist`
-can serve a mix of two builds. npm versions are immutable and do not have that
-problem.
+Enter that once and it keeps pointing at the newest one. They are semver
+prereleases, so they never satisfy an unqualified install, and they can be
+broken at any moment.
 
 ### Staying on a specific build
 
-Any published version can be entered directly and will never move:
+Any published version can be entered directly and will never move, which is how
+to go back when a release misbehaves:
 
 ```
-@pindagus/jellyfin-tizenbrew@1.0.0
+@pindagus/jellyfin-tizenbrew@1.2.3
 ```
 
-Useful for going back when a new release misbehaves. The release notes say which
-jellyfin-web each version carries.
+The release notes say which jellyfin-web each version carries.
 
 ## How it works
 
@@ -86,18 +72,12 @@ Versions are decided by semantic-release from the commit history, not by anyone
 typing a number. Conventional-commit types map onto the bump: `fix` gives a
 patch, `feat` a minor, and a `!` or `BREAKING CHANGE` a major.
 
-The version does not encode which jellyfin-web is inside, because npm offers no
-way to do that. Semver build metadata (`1.0.0+jellyfin-web.10.11.11`) looks like
-the answer and is not: npm strips it on publish and ignores it when comparing
-versions, so two builds against different jellyfin-web releases would collide as
-one already-published version.
-
-What a release contains is recorded in its `package.json` instead, as
-`jellyfinWeb` (a version) and `jellyfinTizen` (a commit, since that repository
-publishes no versions at all). Nothing from Jellyfin is vendored, so those two
-fields are the only record of what a build was made from, and `versions.json` in
-this repository pins what the next one will use. Both also appear on the settings
-page in the client, so the TV can tell you what it is running.
+The version number says nothing about which jellyfin-web is inside; npm offers
+no way to encode that. What a release contains is recorded in its `package.json`
+as `jellyfinWeb` (a version) and `jellyfinTizen` (a commit, since that
+repository publishes no versions at all). Nothing from Jellyfin is vendored, so
+those two fields are the only record of what a build was made from, and
+`versions.json` pins what the next one will use.
 
 ### How a release happens
 
@@ -140,7 +120,6 @@ second package pinned to the previous jellyfin-web becomes worth publishing.
 
 - `main`: releasable. Landing here publishes to the `latest` dist-tag.
 - `dev`: where work and upstream bumps land, published as prereleases to `@dev`.
-- `dist`: build output only, overwritten on every build. Do not edit by hand.
 
 ## Building locally
 
@@ -169,6 +148,8 @@ version would produce.
 Patches on top of upstream are `patch_file` calls in `scripts/build.sh`. Each patch
 warns instead of failing when upstream renames the target pattern, so an upstream
 change does not break the build, but does become visible in the build log.
+
+Parts of this project were developed with AI assistance.
 
 ## Known limitations
 

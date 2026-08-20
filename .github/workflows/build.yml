@@ -152,23 +152,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release --dry-run
-
-      - name: Push to dist branch
-        if: inputs.dry_run != true
-        run: |
-          cd dist-build
-          git init -q
-
-          # `git init` here creates a brand new, separate repo, it does not
-          # inherit any identity set in the checked-out main repo above it.
-          # The identity must be configured inside this new repo, not
-          # --global, so it stays scoped to this throwaway dist checkout.
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          git checkout -q -b dist
-          git add -A
-          git commit -q -m "build: jellyfin-web ${{ steps.resolve.outputs.tag }}"
-          git push -q --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            dist
