@@ -167,6 +167,9 @@ jobs:
       # jellyfin-web build, and jsDelivr purges per file, so listing all 1218
       # would be slow and pointless. One request covers the whole list.
       #
+      # A release purges two paths per file, the tag and the bare one. See the
+      # comment on PREFIXES below for why the bare path cannot be skipped.
+      #
       # continue-on-error because the package is already published by this point.
       # A failed purge means a slow rollout, never a failed release.
       - name: Refresh the jsDelivr cache for the published tag
@@ -176,13 +179,39 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           PKG="@pindagus/jellyfin-tizenbrew"
-          PATHS="$(printf '"/npm/%s@%s/%s",' \
-            "${PKG}" "${TAG}" "package.json" \
-            "${PKG}" "${TAG}" "tizen-adapter.js" \
-            "${PKG}" "${TAG}" "tizen.js" \
-            "${PKG}" "${TAG}" "index.html" \
-            "${PKG}" "${TAG}" "README.md" \
-            "${PKG}" "${TAG}" "www/index.html" | sed 's/,$//')"
+          FILES="package.json tizen-adapter.js tizen.js index.html README.md www/index.html"
+
+          # A release also has to purge the bare path, without any tag. That is
+          # what TizenBrew itself requests (tizenbrew/service/index.js fetches
+          # cdn.jsdelivr.net/<package>/...), and jsDelivr caches it separately
+          # from @latest, so purging only the tag leaves TizenBrew on whatever
+          # that path cached first. A prerelease leaves it alone: the bare path
+          # follows latest, never dev.
+          PREFIXES="${TAG}"
+          if [ "${TAG}" = "latest" ]; then
+            PREFIXES="${TAG} bare"
+          fi
+
+          PATHS=""
+          for prefix in ${PREFIXES}; do
+            for file in ${FILES}; do
+              if [ "${prefix}" = "bare" ]; then
+                PATHS="${PATHS}\"/npm/${PKG}/${file}\","
+              else
+                PATHS="${PATHS}\"/npm/${PKG}@${prefix}/${file}\","
+              fi
+            done
+          done
+          PATHS="${PATHS%,}"
+
+          # Named in both outcome messages, so a failure says which paths were
+          # left stale rather than only naming the tag.
+          PURGED="@${TAG}"
+          if [ "${TAG}" = "latest" ]; then
+            PURGED="@${TAG} and the untagged path"
+          fi
+
+          echo "Purging ${PURGED}"
 
           RESPONSE="$(curl -sS -X POST "https://purge.jsdelivr.net/" \
             -H "Content-Type: application/json" \
@@ -194,7 +223,7 @@ jobs:
           # assuming it worked: a throttled request still returns an id.
           PURGE_ID="$(echo "${RESPONSE}" | jq -r '.id // empty')"
           if [ -z "${PURGE_ID}" ]; then
-            echo "::warning::jsDelivr did not accept the purge; @${TAG} will refresh on its own within 12 hours"
+            echo "::warning::jsDelivr did not accept the purge; ${PURGED} will refresh on its own within 12 hours"
             exit 0
           fi
 
@@ -205,9 +234,9 @@ jobs:
           done
 
           if [ "${STATUS}" = "finished" ]; then
-            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on @${TAG}"
+            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on ${PURGED}"
           else
-            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; @${TAG} will refresh on its own within 12 hours"
+            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; ${PURGED} will refresh on its own within 12 hours"
           fi
 
       - name: Report what a release would do
