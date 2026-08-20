@@ -1,3 +1,16 @@
+# [1.0.0-dev.2](https://github.com/Pindagus/jellyfin-tizenbrew/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-08-20)
+
+
+### Bug Fixes
+
+* 🐛 declare the repository provenance is signed against ([2b87d5a](https://github.com/Pindagus/jellyfin-tizenbrew/commit/2b87d5afb60beb46e39fba8044acadf288051131))
+
+
+### Features
+
+* ✨ automate releases from the commit history ([04b3331](https://github.com/Pindagus/jellyfin-tizenbrew/commit/04b3331781dadfab431c32113f674326a29a069b))
+* ✨ state the bundled jellyfin-web version on npm and releases ([e1f5852](https://github.com/Pindagus/jellyfin-tizenbrew/commit/e1f585208c544c6bcc0ef6084e8b5f3320f21d1f))
+
 # 1.0.0-dev.1 (2026-08-20)
 
 
