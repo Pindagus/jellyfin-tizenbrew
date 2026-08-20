@@ -39,6 +39,53 @@
         ? window.history.length
         : 0;
 
+    var EXIT_LOG_KEY = 'tizenAdapterLastExit';
+
+    // Records what exit just tried, so the settings page can report it afterwards.
+    // Written to storage rather than kept in memory because the interesting case
+    // is the one where exit worked: the page is gone by then, and on a TV there
+    // is no console to read. jellyfin-web itself reads localStorage on startup,
+    // so it is known to work on this hardware.
+    function recordExitAttempt(description) {
+        try {
+            if (window.localStorage && typeof window.localStorage.setItem === 'function') {
+                window.localStorage.setItem(EXIT_LOG_KEY, description);
+            }
+        } catch (err) {
+            // Storage can be disabled or full. Losing a diagnostic note must
+            // never stop the user from leaving the app.
+        }
+    }
+
+    function readLastExitAttempt() {
+        try {
+            if (window.localStorage && typeof window.localStorage.getItem === 'function') {
+                return window.localStorage.getItem(EXIT_LOG_KEY);
+            }
+        } catch (err) {
+            return null;
+        }
+
+        return null;
+    }
+
+    // Walks back one entry at a time, used when a single go(-n) turns out to do
+    // nothing. Each step waits for the previous one, because navigation does not
+    // complete synchronously and firing them in a loop would collapse into one.
+    function stepBack(remaining) {
+        if (remaining <= 0 || !window.history || typeof window.history.back !== 'function') {
+            return;
+        }
+
+        window.history.back();
+
+        if (remaining > 1 && typeof window.setTimeout === 'function') {
+            window.setTimeout(function () {
+                stepBack(remaining - 1);
+            }, 120);
+        }
+    }
+
     var currentApplication = {
         appInfo: {
             // jellyfin-tizen reads this as the "app version" for its API headers.
@@ -68,7 +115,21 @@
             // lands on a jellyfin page instead of the launcher. Jumping over
             // everything the app added clears it in one go.
             try {
+                // Tried first because a TizenBrew build that provides it knows
+                // how to return to its own launcher, which nothing here can do
+                // as reliably. It is absent from TizenBrew's current source, but
+                // exiting worked on a TV running the version of this adapter
+                // that called it, and stopped working when it was removed, so
+                // the hook is real on at least some builds.
+                if (window.tizenbrew && typeof window.tizenbrew.exit === 'function') {
+                    console.log('tizen-adapter: exit via the TizenBrew hook');
+                    recordExitAttempt('TizenBrew hook');
+                    window.tizenbrew.exit();
+                    return;
+                }
+
                 if (!window.history) {
+                    recordExitAttempt('failed: no history object');
                     console.warn('tizen-adapter: no way to exit, window.history is unavailable');
                     return;
                 }
@@ -97,16 +158,40 @@
                 // (a browser that caps history.length, or an exit before any
                 // navigation), so fall back to a single step rather than
                 // computing a jump that lands nowhere and leaves the user stuck.
+                var reading = source + ' ' + (source === 'router'
+                    ? ROUTER_INDEX_AT_LOAD + '→' + routerIndexNow
+                    : HISTORY_DEPTH_AT_LOAD + '→' + window.history.length);
+
                 if (added > 0 && typeof window.history.go === 'function') {
+                    recordExitAttempt(reading + ', go(' + -(added + 1) + ')');
                     window.history.go(-(added + 1));
+
+                    // go(-n) is not guaranteed to do anything on the TV's
+                    // browser engine, and a call that silently does nothing
+                    // leaves the user with no way out of the app at all.
+                    // Navigation is asynchronous, so a still-unchanged position
+                    // shortly after is the signal that the jump was ignored;
+                    // stepping back one at a time is the slower route that only
+                    // relies on back(), which is known to work here.
+                    if (typeof window.setTimeout === 'function') {
+                        window.setTimeout(function () {
+                            if (readRouterIndex() === routerIndexNow) {
+                                console.warn('tizen-adapter: go(-n) did nothing, stepping back instead');
+                                recordExitAttempt(reading + ', go(' + -(added + 1) + ') ignored, stepped back');
+                                stepBack(added + 1);
+                            }
+                        }, 300);
+                    }
                     return;
                 }
 
                 if (typeof window.history.back === 'function') {
+                    recordExitAttempt(reading + ', back()');
                     window.history.back();
                     return;
                 }
 
+                recordExitAttempt('failed: history has no back or go');
                 console.warn('tizen-adapter: no way to exit, history has no back or go');
             } catch (err) {
                 console.warn('tizen-adapter: exit failed', err);
@@ -173,11 +258,22 @@
     //
     // Structured as a list of rows so future entries (e.g. a toggle) can be
     // appended without reshaping the block itself.
+    // Reports what the previous exit attempt actually did, read back from
+    // storage. Deliberately the last attempt rather than a prediction of the
+    // next one: when exit succeeds the page is gone, so a prediction can only
+    // ever be read in the case where exit failed, which is the half that needs
+    // diagnosing least. This survives leaving the app and coming back.
+    function describeLastExit() {
+        var last = readLastExitAttempt();
+        return last || 'not attempted yet';
+    }
+
     function buildVersionRows() {
         return [
             { label: 'jellyfin-web', value: WEB_VERSION },
             { label: 'jellyfin-tizen', value: TIZEN_COMMIT },
             { label: 'Module', value: MODULE_VERSION },
+            { label: 'Last exit', value: describeLastExit() },
             { label: 'Project', value: 'github.com/Pindagus/jellyfin-tizenbrew' }
         ];
     }

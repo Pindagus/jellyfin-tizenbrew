@@ -9,14 +9,39 @@ const adapterSource = readFileSync(new URL('../tizen-adapter.js', import.meta.ur
 // `history` is accepted because the adapter reads history.length at load time to
 // work out how far back the launcher sits; tests that exercise exit have to be
 // able to set that starting depth.
-function loadAdapter({ history } = {}) {
+function loadAdapter({ history, setTimeout: fakeSetTimeout, localStorage } = {}) {
     const win = { screen: { width: 1920, height: 1080 } };
     if (history) {
         win.history = history;
     }
+    if (fakeSetTimeout) {
+        win.setTimeout = fakeSetTimeout;
+    }
+    if (localStorage) {
+        win.localStorage = localStorage;
+    }
     const fn = new Function('window', adapterSource);
     fn(win);
     return win;
+}
+
+// Storage that persists across loadAdapter() calls, which is the whole point:
+// the exit record has to outlive the page that wrote it. `throwOnWrite` models
+// a browser with storage disabled, where losing the note must not break exit.
+function createFakeStorage({ throwOnWrite = false } = {}) {
+    const values = new Map();
+
+    return {
+        getItem(key) {
+            return values.has(key) ? values.get(key) : null;
+        },
+        setItem(key, value) {
+            if (throwOnWrite) {
+                throw new Error('storage is disabled');
+            }
+            values.set(key, String(value));
+        }
+    };
 }
 
 // Simulates TizenBrew's history: the launcher navigated here with location.href,
@@ -298,6 +323,75 @@ describe('tizen-adapter', () => {
             expect(history.currentEntry()).toBe('launcher');
         });
 
+        it('uses the TizenBrew hook when the build provides one', () => {
+            // A TizenBrew build that exposes this knows how to return to its own
+            // launcher. Removing this branch is what stopped exit working on a
+            // real TV, so nothing here may take precedence over it.
+            const history = createFakeHistory();
+            const local = loadAdapter({ history });
+            let hookCalled = false;
+            local.tizenbrew = { exit: () => { hookCalled = true; } };
+
+            history.push('module:/usersettings');
+            local.tizen.application.getCurrentApplication().exit();
+
+            expect(hookCalled).toBe(true);
+            // The history must be left alone when the hook handles it.
+            expect(history.currentEntry()).toBe('module:/usersettings');
+        });
+
+        it('steps back one at a time when go(-n) does nothing', () => {
+            // The TV runs an old browser engine where a multi-step go() may be
+            // ignored outright. Without this the user is left with no way out of
+            // the app, which is worse than the bug it was meant to fix.
+            const history = createFakeHistory();
+            const realGo = history.go.bind(history);
+            let goIgnored = false;
+            history.go = (delta) => {
+                // Model an engine that accepts a single step but ignores a
+                // multi-step jump, which is what back() and go(-n) come down to.
+                if (delta === -1) {
+                    realGo(-1);
+                } else {
+                    goIgnored = true;
+                }
+            };
+
+            const timers = [];
+            const local = loadAdapter({ history, setTimeout: (fn) => { timers.push(fn); } });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            // The jump was ignored, so the user is still inside the app.
+            expect(goIgnored).toBe(true);
+            expect(history.currentEntry()).toBe('module:/home');
+
+            // Draining the timers runs the recovery: one back() per entry.
+            while (timers.length) {
+                timers.shift()();
+            }
+
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
+        it('still exits when storage refuses to record the attempt', () => {
+            // Storage can be disabled or full. Losing a diagnostic note is
+            // acceptable; trapping the user inside the app is not.
+            const history = createFakeHistory();
+            const local = loadAdapter({
+                history,
+                localStorage: createFakeStorage({ throwOnWrite: true })
+            });
+
+            history.push('module:/usersettings');
+
+            expect(() => local.tizen.application.getCurrentApplication().exit()).not.toThrow();
+            expect(history.currentEntry()).toBe('launcher');
+        });
+
         it('warns instead of throwing when exit has no usable mechanism', () => {
             const local = loadAdapter();
             local.history = undefined;
@@ -337,10 +431,70 @@ describe('tizen-adapter', () => {
             expect(text).toContain('jellyfin-tizen');
             expect(text).toContain('Module');
 
+            // The TV has no readable console, so what exit did has to be visible
+            // on screen or it cannot be diagnosed at all.
+            expect(text).toContain('Last exit');
+
             // win here was loaded via loadAdapter(), which leaves the
             // DEVELOPMENT placeholders since no build step ran: one per
             // stamped version.
             expect(text.match(/DEVELOPMENT/g).length).toBe(3);
+        });
+
+        it('reports what the previous exit attempt actually did', () => {
+            // The case worth diagnosing is the one where exit worked: the page
+            // is gone by then, so the record has to survive into the next run.
+            const storage = createFakeStorage();
+            const history = createFakeHistory();
+            const first = loadAdapter({ history, localStorage: storage });
+
+            history.push('module:/usersettings');
+            history.push('module:/home');
+            first.tizen.application.getCurrentApplication().exit();
+
+            // A fresh load, as if the user came back into the app afterwards.
+            const second = loadAdapter({
+                history: createFakeHistory(),
+                localStorage: storage
+            });
+            const doc = createFakeDocument({ withAnchor: true });
+            second.__tizenAdapterInjectVersionInfo(doc);
+
+            const text = doc.getElementById('tizenAdapterVersionInfo')
+                .children.map((row) => row.textContent).join(' | ');
+
+            expect(text).toContain('router 0→2');
+            expect(text).toContain('go(-3)');
+        });
+
+        it('records that the TizenBrew hook was used', () => {
+            const storage = createFakeStorage();
+            const history = createFakeHistory();
+            const local = loadAdapter({ history, localStorage: storage });
+            local.tizenbrew = { exit: () => {} };
+
+            local.tizen.application.getCurrentApplication().exit();
+
+            const doc = createFakeDocument({ withAnchor: true });
+            local.__tizenAdapterInjectVersionInfo(doc);
+            const text = doc.getElementById('tizenAdapterVersionInfo')
+                .children.map((row) => row.textContent).join(' | ');
+
+            expect(text).toContain('TizenBrew hook');
+        });
+
+        it('says so when no exit has been attempted yet', () => {
+            const local = loadAdapter({
+                history: createFakeHistory(),
+                localStorage: createFakeStorage()
+            });
+
+            const doc = createFakeDocument({ withAnchor: true });
+            local.__tizenAdapterInjectVersionInfo(doc);
+            const text = doc.getElementById('tizenAdapterVersionInfo')
+                .children.map((row) => row.textContent).join(' | ');
+
+            expect(text).toContain('not attempted yet');
         });
 
         it('does not inject the block twice on repeat calls', () => {
