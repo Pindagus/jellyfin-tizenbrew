@@ -9,62 +9,30 @@ const adapterSource = readFileSync(new URL('../tizen-adapter.js', import.meta.ur
 // `history` is accepted because the adapter reads history.length at load time to
 // work out how far back the launcher sits; tests that exercise exit have to be
 // able to set that starting depth.
-function loadAdapter({ history, setTimeout: fakeSetTimeout, localStorage } = {}) {
+function loadAdapter({ history, setTimeout: fakeSetTimeout } = {}) {
     const win = { screen: { width: 1920, height: 1080 } };
     if (history) {
         win.history = history;
     }
-    if (fakeSetTimeout) {
-        win.setTimeout = fakeSetTimeout;
-    }
-    if (localStorage) {
-        win.localStorage = localStorage;
-    }
+    // Exit walks back one entry per timer tick, so without a setTimeout only the
+    // first step would run. Executing callbacks immediately keeps the assertions
+    // about where the user ends up, rather than about how many timers fired.
+    win.setTimeout = fakeSetTimeout || ((fn) => { fn(); });
     const fn = new Function('window', adapterSource);
     fn(win);
     return win;
 }
 
-// Storage that persists across loadAdapter() calls, which is the whole point:
-// the exit record has to outlive the page that wrote it. `throwOnWrite` models
-// a browser with storage disabled, where losing the note must not break exit.
-function createFakeStorage({ throwOnWrite = false } = {}) {
-    const values = new Map();
-
-    return {
-        getItem(key) {
-            return values.has(key) ? values.get(key) : null;
-        },
-        setItem(key, value) {
-            if (throwOnWrite) {
-                throw new Error('storage is disabled');
-            }
-            values.set(key, String(value));
-        }
-    };
-}
-
 // Simulates TizenBrew's history: the launcher navigated here with location.href,
 // so the module starts one entry deep. Navigating pushes entries the way a
-// single-page app does, and back()/go() move through them, so a test can assert
+// single-page app does, and back() moves through them, so a test can assert
 // where the user ends up rather than which method was called.
-//
-// Entries carry a router index the way react-router does: 0 on the entry the app
-// started on, incremented per push. Entries that predate the app have none,
-// which is what makes the count meaningful. `withRouterState: false` models a
-// browser where history.state never arrives, so the fallback gets exercised.
-function createFakeHistory({ entriesBeforeModule = 1, withRouterState = true } = {}) {
+function createFakeHistory({ entriesBeforeModule = 1 } = {}) {
     const entries = [];
     for (let i = 0; i < entriesBeforeModule; i++) {
-        entries.push({
-            name: i === entriesBeforeModule - 1 ? 'launcher' : `outside-${i}`,
-            state: null
-        });
+        entries.push(i === entriesBeforeModule - 1 ? 'launcher' : `outside-${i}`);
     }
-    entries.push({
-        name: 'module:/home',
-        state: withRouterState ? { idx: 0 } : null
-    });
+    entries.push('module:/home');
 
     let index = entries.length - 1;
 
@@ -72,18 +40,10 @@ function createFakeHistory({ entriesBeforeModule = 1, withRouterState = true } =
         get length() {
             return entries.length;
         },
-        get state() {
-            return entries[index].state;
-        },
         push(name) {
-            const previous = entries[index].state;
-            const nextIdx = previous && typeof previous.idx === 'number' ? previous.idx + 1 : null;
             index += 1;
             entries.length = index;
-            entries.push({
-                name,
-                state: withRouterState && nextIdx !== null ? { idx: nextIdx } : null
-            });
+            entries.push(name);
         },
         go(delta) {
             index = Math.max(0, Math.min(entries.length - 1, index + delta));
@@ -92,7 +52,7 @@ function createFakeHistory({ entriesBeforeModule = 1, withRouterState = true } =
             this.go(-1);
         },
         currentEntry() {
-            return entries[index].name;
+            return entries[index];
         }
     };
 }
@@ -292,21 +252,6 @@ describe('tizen-adapter', () => {
             expect(history.currentEntry()).toBe('launcher');
         });
 
-        it('returns to the launcher when history.state carries no router index', () => {
-            // Not every browser hands back the state object react-router writes.
-            // Without it the adapter has to fall back to history.length rather
-            // than compute a jump from a missing number and strand the user.
-            const history = createFakeHistory({ withRouterState: false });
-            const local = loadAdapter({ history });
-
-            history.push('module:/usersettings');
-            history.push('module:/home');
-
-            local.tizen.application.getCurrentApplication().exit();
-
-            expect(history.currentEntry()).toBe('launcher');
-        });
-
         it('returns to the launcher when the launcher itself sits deep in history', () => {
             // The TizenBrew launcher has its own routes (module manager,
             // settings), so it can have pushed entries of its own before
@@ -323,72 +268,50 @@ describe('tizen-adapter', () => {
             expect(history.currentEntry()).toBe('launcher');
         });
 
-        it('uses the TizenBrew hook when the build provides one', () => {
-            // A TizenBrew build that exposes this knows how to return to its own
-            // launcher. Removing this branch is what stopped exit working on a
-            // real TV, so nothing here may take precedence over it.
+        it('never calls go(), which the TV ignores outright', () => {
+            // The TV's browser engine accepts back() but silently ignores a
+            // multi-step go(), which is what made the app impossible to leave.
+            // Exit must therefore reach the launcher without go() at all.
             const history = createFakeHistory();
-            const local = loadAdapter({ history });
-            let hookCalled = false;
-            local.tizenbrew = { exit: () => { hookCalled = true; } };
-
-            history.push('module:/usersettings');
-            local.tizen.application.getCurrentApplication().exit();
-
-            expect(hookCalled).toBe(true);
-            // The history must be left alone when the hook handles it.
-            expect(history.currentEntry()).toBe('module:/usersettings');
-        });
-
-        it('steps back one at a time when go(-n) does nothing', () => {
-            // The TV runs an old browser engine where a multi-step go() may be
-            // ignored outright. Without this the user is left with no way out of
-            // the app, which is worse than the bug it was meant to fix.
-            const history = createFakeHistory();
+            let goCalls = 0;
             const realGo = history.go.bind(history);
-            let goIgnored = false;
             history.go = (delta) => {
-                // Model an engine that accepts a single step but ignores a
-                // multi-step jump, which is what back() and go(-n) come down to.
-                if (delta === -1) {
-                    realGo(-1);
-                } else {
-                    goIgnored = true;
-                }
+                goCalls += 1;
+                realGo(delta);
             };
+            // back() must not route through the patched go(), or the count
+            // would measure the fake rather than the adapter.
+            history.back = () => { realGo(-1); };
 
-            const timers = [];
-            const local = loadAdapter({ history, setTimeout: (fn) => { timers.push(fn); } });
+            const local = loadAdapter({ history });
 
             history.push('module:/usersettings');
             history.push('module:/home');
 
             local.tizen.application.getCurrentApplication().exit();
 
-            // The jump was ignored, so the user is still inside the app.
-            expect(goIgnored).toBe(true);
-            expect(history.currentEntry()).toBe('module:/home');
-
-            // Draining the timers runs the recovery: one back() per entry.
-            while (timers.length) {
-                timers.shift()();
-            }
-
+            expect(goCalls).toBe(0);
             expect(history.currentEntry()).toBe('launcher');
         });
 
-        it('still exits when storage refuses to record the attempt', () => {
-            // Storage can be disabled or full. Losing a diagnostic note is
-            // acceptable; trapping the user inside the app is not.
+        it('walks back one entry at a time rather than in one jump', () => {
             const history = createFakeHistory();
-            const local = loadAdapter({
-                history,
-                localStorage: createFakeStorage({ throwOnWrite: true })
-            });
+            let backCalls = 0;
+            const realBack = history.back.bind(history);
+            history.back = () => {
+                backCalls += 1;
+                realBack();
+            };
+
+            const local = loadAdapter({ history });
 
             history.push('module:/usersettings');
+            history.push('module:/home');
 
-            expect(() => local.tizen.application.getCurrentApplication().exit()).not.toThrow();
+            local.tizen.application.getCurrentApplication().exit();
+
+            // Two entries the app added, plus the one that brought it here.
+            expect(backCalls).toBe(3);
             expect(history.currentEntry()).toBe('launcher');
         });
 
@@ -431,70 +354,10 @@ describe('tizen-adapter', () => {
             expect(text).toContain('jellyfin-tizen');
             expect(text).toContain('Module');
 
-            // The TV has no readable console, so what exit did has to be visible
-            // on screen or it cannot be diagnosed at all.
-            expect(text).toContain('Last exit');
-
             // win here was loaded via loadAdapter(), which leaves the
             // DEVELOPMENT placeholders since no build step ran: one per
             // stamped version.
             expect(text.match(/DEVELOPMENT/g).length).toBe(3);
-        });
-
-        it('reports what the previous exit attempt actually did', () => {
-            // The case worth diagnosing is the one where exit worked: the page
-            // is gone by then, so the record has to survive into the next run.
-            const storage = createFakeStorage();
-            const history = createFakeHistory();
-            const first = loadAdapter({ history, localStorage: storage });
-
-            history.push('module:/usersettings');
-            history.push('module:/home');
-            first.tizen.application.getCurrentApplication().exit();
-
-            // A fresh load, as if the user came back into the app afterwards.
-            const second = loadAdapter({
-                history: createFakeHistory(),
-                localStorage: storage
-            });
-            const doc = createFakeDocument({ withAnchor: true });
-            second.__tizenAdapterInjectVersionInfo(doc);
-
-            const text = doc.getElementById('tizenAdapterVersionInfo')
-                .children.map((row) => row.textContent).join(' | ');
-
-            expect(text).toContain('router 0→2');
-            expect(text).toContain('go(-3)');
-        });
-
-        it('records that the TizenBrew hook was used', () => {
-            const storage = createFakeStorage();
-            const history = createFakeHistory();
-            const local = loadAdapter({ history, localStorage: storage });
-            local.tizenbrew = { exit: () => {} };
-
-            local.tizen.application.getCurrentApplication().exit();
-
-            const doc = createFakeDocument({ withAnchor: true });
-            local.__tizenAdapterInjectVersionInfo(doc);
-            const text = doc.getElementById('tizenAdapterVersionInfo')
-                .children.map((row) => row.textContent).join(' | ');
-
-            expect(text).toContain('TizenBrew hook');
-        });
-
-        it('says so when no exit has been attempted yet', () => {
-            const local = loadAdapter({
-                history: createFakeHistory(),
-                localStorage: createFakeStorage()
-            });
-
-            const doc = createFakeDocument({ withAnchor: true });
-            local.__tizenAdapterInjectVersionInfo(doc);
-            const text = doc.getElementById('tizenAdapterVersionInfo')
-                .children.map((row) => row.textContent).join(' | ');
-
-            expect(text).toContain('not attempted yet');
         });
 
         it('does not inject the block twice on repeat calls', () => {
