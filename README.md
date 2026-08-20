@@ -15,8 +15,10 @@ Open TizenBrew on the TV, press the green button, choose to add via NPM and ente
 That is the released package and the one to use. It always resolves to the latest
 release, never to a development build.
 
-> **Not published yet.** The npm package is not live at the moment, so this route
-> does not work today.
+> **No release yet.** Only a development build has been published so far, and npm
+> always points `latest` at something, so an unqualified install currently
+> returns that development build. The first real release fixes this for good:
+> from then on `latest` only ever names a release.
 
 ### Development builds
 
@@ -42,14 +44,29 @@ hours and refreshes files independently of each other, so a freshly built `dist`
 can serve a mix of two builds. npm versions are immutable and do not have that
 problem.
 
+### Staying on a specific build
+
+Any published version can be entered directly and will never move:
+
+```
+@pindagus/jellyfin-tizenbrew@1.0.0
+```
+
+Useful for going back when a new release misbehaves. The release notes say which
+jellyfin-web each version carries.
+
 ## How it works
 
-Nothing from Jellyfin is vendored. Every build clones fresh:
+Nothing from Jellyfin is vendored. Every build clones fresh, at the versions
+`versions.json` pins:
 
-- `jellyfin/jellyfin-web` at the latest release tag
-- `jellyfin/jellyfin-tizen`, the official Tizen wrapper, at `master`
+- `jellyfin/jellyfin-web` at a release tag
+- `jellyfin/jellyfin-tizen`, the official Tizen wrapper, at a commit
 
-That way, upstream Tizen patches come along automatically.
+Pinning rather than always taking the newest is what makes an old release
+reproducible. A daily workflow proposes new pins by pull request, so upstream
+changes still arrive on their own, but only after passing through a build you
+can test.
 
 The only project-owned code is `tizen-adapter.js`. The wrapper normally loads
 `$WEBAPIS/webapis/webapis.js`, a placeholder that only resolves inside an installed
@@ -65,19 +82,64 @@ caught before publishing.
 
 ## Versioning
 
-Releases are numbered `<module>+jellyfin-web.<upstream>`, for example
-`1.0.0+jellyfin-web.10.11.11`. The first part is this module's own semver and moves
-when the module changes; the part after the plus is semver build metadata naming the
-jellyfin-web release inside. Both numbers are also shown on the settings page in the
-client, so you can tell from the TV which build you are running.
+Versions are decided by semantic-release from the commit history, not by anyone
+typing a number. Conventional-commit types map onto the bump: `fix` gives a
+patch, `feat` a minor, and a `!` or `BREAKING CHANGE` a major.
 
-Development builds add a prerelease suffix carrying the CI run number, as in
-`1.0.0-dev.42+jellyfin-web.10.11.11`. The module version stays where it is; only
-the suffix moves, so testing never advances the release number.
+The version does not encode which jellyfin-web is inside, because npm offers no
+way to do that. Semver build metadata (`1.0.0+jellyfin-web.10.11.11`) looks like
+the answer and is not: npm strips it on publish and ignores it when comparing
+versions, so two builds against different jellyfin-web releases would collide as
+one already-published version.
+
+What a release contains is recorded in its `package.json` instead, as
+`jellyfinWeb` (a version) and `jellyfinTizen` (a commit, since that repository
+publishes no versions at all). Nothing from Jellyfin is vendored, so those two
+fields are the only record of what a build was made from, and `versions.json` in
+this repository pins what the next one will use. Both also appear on the settings
+page in the client, so the TV can tell you what it is running.
+
+### How a release happens
+
+```
+daily check finds jellyfin-web 10.12.0
+  -> pull request on dev: "feat: bump jellyfin-web v10.11.11 to v10.12.0"
+  -> you merge it
+  -> 1.1.0-dev.1 published to the npm dev dist-tag
+  -> you test it on the TV
+  -> you promote dev to main
+  -> 1.1.0 published to latest, with a GitHub release and notes
+```
+
+The check writes the commit type to match how far upstream moved, so a
+jellyfin-web minor arrives as `feat` and becomes a minor here. Editing the
+commit subject before merging changes that, which is how a release gets a
+bigger number than upstream alone would justify.
+
+Your own commits work the same way: a `fix:` on dev is a patch, a `feat:` is a
+minor. Commits that release nothing (`docs`, `chore`, `style`) build and verify
+but publish nothing, which is the intended outcome rather than a failure.
+
+Prereleases are numbered `1.1.0-dev.1`, `1.1.0-dev.2` and so on. They never
+satisfy an unqualified install, which is what keeps them off `latest` while
+remaining installable as `@dev`.
+
+## Supported servers
+
+One build covers both current Jellyfin server lines. jellyfin-web declares the
+oldest server it will talk to (`MINIMUM_VERSION` in `@jellyfin/sdk`), currently
+`10.10.0`, and refuses to connect below it rather than degrading quietly. A
+build against jellyfin-web 10.11 therefore serves servers on 10.10 and 10.11
+alike, which is why there is no separate 10.10 package.
+
+The build checks that constant on every run and warns when upstream raises it,
+since that is the point where users on older servers would be stranded and a
+second package pinned to the previous jellyfin-web becomes worth publishing.
 
 ## Branches
 
-- `main`: source, workflows, docs. Pull requests land here.
+- `main`: releasable. Landing here publishes to the `latest` dist-tag.
+- `dev`: where work and upstream bumps land, published as prereleases to `@dev`.
 - `dist`: build output only, overwritten on every build. Do not edit by hand.
 
 ## Building locally
@@ -96,6 +158,11 @@ exactly what CI does.
 The output goes into `dist-build/`. `npm run build` invokes `scripts/build.sh`,
 which ends by running `scripts/verify-build.sh`; the build fails if verification
 does not pass.
+
+A local build is versioned `0.0.0-local`. The real number is decided after the
+build, by semantic-release, which then calls `scripts/set-version.sh` to write it
+into the manifest and the adapter. Run that script by hand to see what a given
+version would produce.
 
 ## Contributing
 

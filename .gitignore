@@ -3,3 +3,4 @@ dist-build/
 .build-work/
 *.log
 docs/
+.idea/

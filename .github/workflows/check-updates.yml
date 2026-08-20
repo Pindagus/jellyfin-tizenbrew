@@ -1,0 +1,136 @@
+name: Check for upstream updates
+
+# Nothing here is vendored: every build clones jellyfin-web and jellyfin-tizen
+# at the versions versions.json pins. This watches both upstreams and opens a
+# pull request against dev when either moves.
+#
+# The commit subject it writes is what sizes the release. semantic-release maps
+# conventional-commit types onto a bump, so the type has to reflect how far
+# upstream moved: a jellyfin-web minor has to arrive as `feat`, or the release
+# would understate it as a patch.
+
+on:
+  schedule:
+    # Daily. jellyfin-web releases roughly monthly and jellyfin-tizen has had no
+    # substantive commit since December 2024, so anything more often is hundreds
+    # of runs per find. Trigger it by hand when waiting a day is too long.
+    #
+    # Note that GitHub disables scheduled workflows in a repository with no
+    # activity for 60 days, so a silent check is worth a glance now and then.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Compare upstream against the pins
+        id: compare
+        run: |
+          set -euo pipefail
+
+          PINNED_WEB="$(jq -r '.jellyfinWeb' versions.json)"
+          PINNED_TIZEN="$(jq -r '.jellyfinTizen' versions.json)"
+
+          LATEST_WEB="$(curl -sSf https://api.github.com/repos/jellyfin/jellyfin-web/releases/latest | jq -r .tag_name)"
+          if [ -z "${LATEST_WEB}" ] || [ "${LATEST_WEB}" = 'null' ]; then
+            echo "could not resolve the latest jellyfin-web release" >&2
+            exit 1
+          fi
+
+          LATEST_TIZEN="$(git ls-remote https://github.com/jellyfin/jellyfin-tizen.git refs/heads/master | cut -f1)"
+          if [ -z "${LATEST_TIZEN}" ]; then
+            echo "could not resolve the jellyfin-tizen master commit" >&2
+            exit 1
+          fi
+
+          echo "pinned:   web ${PINNED_WEB}, tizen ${PINNED_TIZEN}"
+          echo "upstream: web ${LATEST_WEB}, tizen ${LATEST_TIZEN}"
+
+          if [ "${PINNED_WEB}" = "${LATEST_WEB}" ] && [ "${PINNED_TIZEN}" = "${LATEST_TIZEN}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "nothing moved upstream"
+            exit 0
+          fi
+
+          # How far jellyfin-web moved decides the commit type. jellyfin-tizen
+          # publishes no versions at all, so a moved commit there can only ever
+          # be read as a fix.
+          LEVEL="$(node -e '
+            const [pinned, latest] = process.argv.slice(1);
+            const parse = (v) => v.replace(/^v/, "").split(".").map(Number);
+            const [pMaj, pMin] = parse(pinned);
+            const [lMaj, lMin] = parse(latest);
+            if (lMaj > pMaj) console.log("major");
+            else if (lMin > pMin) console.log("minor");
+            else console.log("patch");
+          ' "${PINNED_WEB}" "${LATEST_WEB}")"
+
+          SUMMARY=""
+          if [ "${PINNED_WEB}" != "${LATEST_WEB}" ]; then
+            SUMMARY="jellyfin-web ${PINNED_WEB} to ${LATEST_WEB}"
+            case "${LEVEL}" in
+              major) TYPE='feat!' ;;
+              minor) TYPE='feat' ;;
+              *)     TYPE='fix' ;;
+            esac
+          else
+            # Only the wrapper moved.
+            SUMMARY="jellyfin-tizen ${PINNED_TIZEN:0:7} to ${LATEST_TIZEN:0:7}"
+            TYPE='fix'
+          fi
+
+          if [ "${PINNED_WEB}" != "${LATEST_WEB}" ] && [ "${PINNED_TIZEN}" != "${LATEST_TIZEN}" ]; then
+            SUMMARY="${SUMMARY}, jellyfin-tizen ${PINNED_TIZEN:0:7} to ${LATEST_TIZEN:0:7}"
+          fi
+
+          jq --arg web "${LATEST_WEB}" --arg tizen "${LATEST_TIZEN}" \
+            '.jellyfinWeb = $web | .jellyfinTizen = $tizen' versions.json > versions.tmp
+          mv versions.tmp versions.json
+
+          {
+            echo "changed=true"
+            echo "type=${TYPE}"
+            echo "summary=${SUMMARY}"
+            echo "level=${LEVEL}"
+            echo "latest_web=${LATEST_WEB}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request
+        if: steps.compare.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          base: dev
+          branch: upstream-bump
+          # Reuse one branch: a newer upstream version supersedes an older
+          # proposal rather than leaving a queue of stale pull requests.
+          title: '${{ steps.compare.outputs.type }}: bump ${{ steps.compare.outputs.summary }}'
+          commit-message: |
+            ${{ steps.compare.outputs.type }}: bump ${{ steps.compare.outputs.summary }}
+
+            Sizes the release to how far upstream moved: a jellyfin-web
+            ${{ steps.compare.outputs.level }} release becomes a
+            ${{ steps.compare.outputs.level }} here.
+          body: |
+            Upstream moved, so `versions.json` needs repinning.
+
+            **${{ steps.compare.outputs.summary }}**
+
+            Merging this publishes a prerelease to the npm `dev` dist-tag.
+            Install it on the TV as `@pindagus/jellyfin-tizenbrew@dev`, and
+            promote `dev` to `main` once it checks out.
+
+            The commit type is `${{ steps.compare.outputs.type }}`, which makes
+            this a **${{ steps.compare.outputs.level }}** release. Edit the
+            commit subject before merging to change that.
+          delete-branch: true
