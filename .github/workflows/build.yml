@@ -5,14 +5,10 @@ name: Build and release
 # (fix -> patch, feat -> minor, ! or BREAKING CHANGE -> major). Landing on dev
 # publishes a prerelease to the npm "dev" dist-tag; landing on main publishes a
 # release to "latest" and opens a GitHub Release with generated notes.
-#
-# main is deliberately not in the push trigger yet: it still carries untested
-# work. This trigger arrives on main with the pull request that promotes dev,
-# which is the point at which main becomes releasable.
 
 on:
   push:
-    branches: [dev]
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
       web_tag:
