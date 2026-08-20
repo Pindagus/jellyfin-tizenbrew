@@ -4,3 +4,5 @@ dist-build/
 *.log
 docs/
 .idea/
+.claude/
+.superpowers/
