@@ -133,6 +133,7 @@ jobs:
         run: npx vitest run test/package-metadata.test.js
 
       - name: Release
+        id: release
         if: inputs.dry_run != true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,6 +147,72 @@ jobs:
           # style) ends here without a release, which is the intended outcome
           # rather than a failure.
           npx semantic-release
+
+          # The purge step needs to know whether anything was actually
+          # published, and on which dist-tag. Reading it back from the manifest
+          # semantic-release just wrote is more reliable than parsing its log.
+          if [ -f dist-build/package.json ]; then
+            PUBLISHED="$(jq -r '.version' dist-build/package.json)"
+            if [ "${PUBLISHED}" != "0.0.0-local" ] && [ -n "${PUBLISHED}" ]; then
+              echo "version=${PUBLISHED}" >> "$GITHUB_OUTPUT"
+              case "${PUBLISHED}" in
+                *-dev.*) echo "tag=dev" >> "$GITHUB_OUTPUT" ;;
+                *)       echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
+              esac
+            fi
+          fi
+
+      # jsDelivr caches a dist-tag on its edge for 12 hours, because the tag can
+      # move. TizenBrew fetches modules straight from jsDelivr and caches nothing
+      # itself, so without this a TV installing @dev keeps getting the previous
+      # build for up to half a day. Pinned versions are immutable and unaffected.
+      #
+      # Only the files this project actually changes are purged: www/ carries the
+      # jellyfin-web build, and jsDelivr purges per file, so listing all 1218
+      # would be slow and pointless. One request covers the whole list.
+      #
+      # continue-on-error because the package is already published by this point.
+      # A failed purge means a slow rollout, never a failed release.
+      - name: Refresh the jsDelivr cache for the published tag
+        if: inputs.dry_run != true && steps.release.outputs.tag != ''
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          PKG="@pindagus/jellyfin-tizenbrew"
+          PATHS="$(printf '"/npm/%s@%s/%s",' \
+            "${PKG}" "${TAG}" "package.json" \
+            "${PKG}" "${TAG}" "tizen-adapter.js" \
+            "${PKG}" "${TAG}" "tizen.js" \
+            "${PKG}" "${TAG}" "index.html" \
+            "${PKG}" "${TAG}" "README.md" \
+            "${PKG}" "${TAG}" "www/index.html" | sed 's/,$//')"
+
+          RESPONSE="$(curl -sS -X POST "https://purge.jsdelivr.net/" \
+            -H "Content-Type: application/json" \
+            -d "{\"path\":[${PATHS}]}")"
+
+          echo "${RESPONSE}"
+
+          # A purge is queued, not instant, so report the outcome rather than
+          # assuming it worked: a throttled request still returns an id.
+          PURGE_ID="$(echo "${RESPONSE}" | jq -r '.id // empty')"
+          if [ -z "${PURGE_ID}" ]; then
+            echo "::warning::jsDelivr did not accept the purge; @${TAG} will refresh on its own within 12 hours"
+            exit 0
+          fi
+
+          for _ in $(seq 1 20); do
+            STATUS="$(curl -sS "https://purge.jsdelivr.net/status/${PURGE_ID}" | jq -r '.status // empty')"
+            [ "${STATUS}" = "finished" ] && break
+            sleep 3
+          done
+
+          if [ "${STATUS}" = "finished" ]; then
+            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on @${TAG}"
+          else
+            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; @${TAG} will refresh on its own within 12 hours"
+          fi
 
       - name: Report what a release would do
         if: inputs.dry_run == true
