@@ -4,9 +4,12 @@
 // used by a packaged .wgt does not resolve.
 (function () {
     // Replaced by the build workflow. MODULE_VERSION is our own semver for this
-    // package, WEB_VERSION is the jellyfin-web version being bundled.
+    // package, WEB_VERSION is the jellyfin-web version being bundled, and
+    // TIZEN_COMMIT is the jellyfin-tizen commit it was built from (that
+    // repository publishes no versions, so a commit is all there is to name).
     var MODULE_VERSION = 'DEVELOPMENT';
     var WEB_VERSION = 'DEVELOPMENT';
+    var TIZEN_COMMIT = 'DEVELOPMENT';
 
     var currentApplication = {
         appInfo: {
@@ -112,6 +115,7 @@
     function buildVersionRows() {
         return [
             { label: 'jellyfin-web', value: WEB_VERSION },
+            { label: 'jellyfin-tizen', value: TIZEN_COMMIT },
             { label: 'Module', value: MODULE_VERSION },
             { label: 'Project', value: 'github.com/Pindagus/jellyfin-tizenbrew' }
         ];

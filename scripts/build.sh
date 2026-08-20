@@ -214,9 +214,11 @@ Installation details, known limitations and how builds work:
 Licensed [MPL-2.0](https://github.com/Pindagus/jellyfin-tizenbrew/blob/main/LICENSE).
 EOF
 
-# The jellyfin-web version is known now and never changes afterwards, so it is
+# Both upstream versions are known now and never change afterwards, so they are
 # stamped here. The module version is not: set-version.sh handles that.
 perl -pi -e "s/var WEB_VERSION = 'DEVELOPMENT';/var WEB_VERSION = '${WEB_VERSION}';/" \
+    "${OUT}/tizen-adapter.js"
+perl -pi -e "s/var TIZEN_COMMIT = 'DEVELOPMENT';/var TIZEN_COMMIT = '${TIZEN_COMMIT}';/" \
     "${OUT}/tizen-adapter.js"
 
 # A local build has no semantic-release step after it, so stamp the placeholder

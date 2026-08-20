@@ -78,12 +78,16 @@ if [ -f "${OUT}/tizen-adapter.js" ]; then
     if [ ! -s "${OUT}/tizen-adapter.js" ]; then
         fail "tizen-adapter.js is empty"
     else
-        # WEB_VERSION is stamped during the build, so its placeholder surviving
-        # means the build itself failed to substitute. MODULE_VERSION is not
-        # checked here: semantic-release fills that in afterwards, via
-        # scripts/set-version.sh, so at this point it is legitimately unset.
+        # WEB_VERSION and TIZEN_COMMIT are stamped during the build, so either
+        # placeholder surviving means the build itself failed to substitute.
+        # MODULE_VERSION is not checked here: semantic-release fills that in
+        # afterwards, via scripts/set-version.sh, so at this point it is
+        # legitimately unset.
         if grep -q "var WEB_VERSION = 'DEVELOPMENT';" "${OUT}/tizen-adapter.js"; then
             fail "tizen-adapter.js still has the WEB_VERSION placeholder; the version stamping step did not run"
+        fi
+        if grep -q "var TIZEN_COMMIT = 'DEVELOPMENT';" "${OUT}/tizen-adapter.js"; then
+            fail "tizen-adapter.js still has the TIZEN_COMMIT placeholder; the version stamping step did not run"
         fi
         if ! grep -q 'window.tizen' "${OUT}/tizen-adapter.js"; then
             fail "tizen-adapter.js does not define window.tizen"

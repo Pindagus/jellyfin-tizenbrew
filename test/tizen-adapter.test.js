@@ -209,7 +209,7 @@ describe('tizen-adapter', () => {
             expect(doc.getElementById('tizenAdapterVersionInfo')).toBeNull();
         });
 
-        it('injects a block containing both version numbers when the anchor exists', () => {
+        it('injects a block naming every version the build stamps', () => {
             const doc = createFakeDocument({ withAnchor: true });
 
             win.__tizenAdapterInjectVersionInfo(doc);
@@ -218,10 +218,19 @@ describe('tizen-adapter', () => {
             expect(block).not.toBeNull();
 
             const text = block.children.map((row) => row.textContent).join(' | ');
-            // win here was loaded via loadAdapter(), which stamps the
-            // DEVELOPMENT placeholders since no build step ran.
-            expect(text).toContain('DEVELOPMENT');
-            expect(text.match(/DEVELOPMENT/g).length).toBe(2);
+
+            // This block is the only place a user can see what their TV is
+            // running, so every stamped version has to reach it. jellyfin-tizen
+            // was stamped into package.json but not into the adapter, which is
+            // how it went missing from the settings page on a real TV.
+            expect(text).toContain('jellyfin-web');
+            expect(text).toContain('jellyfin-tizen');
+            expect(text).toContain('Module');
+
+            // win here was loaded via loadAdapter(), which leaves the
+            // DEVELOPMENT placeholders since no build step ran: one per
+            // stamped version.
+            expect(text.match(/DEVELOPMENT/g).length).toBe(3);
         });
 
         it('does not inject the block twice on repeat calls', () => {
