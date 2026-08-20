@@ -92,6 +92,14 @@ jellyfin-web minor arrives as `feat` and becomes a minor here. Editing the
 commit subject before merging changes that, which is how a release gets a bigger
 number than upstream alone would justify.
 
+There is no `CHANGELOG.md`, by choice. Release notes live on the releases page,
+which is where anyone looking for them goes, and keeping a copy in the
+repository would mean semantic-release pushing a commit to `main` on every
+release. That push is exactly what `main`'s ruleset blocks, and the standard
+`GITHUB_TOKEN` cannot be granted a bypass on a user-owned repository, so the
+file would cost either the protection or a long-lived credential. semantic-release
+itself ships without one for the same reason.
+
 Publishing runs over npm trusted publishing: the workflow exchanges a
 short-lived OIDC token for publish rights, so no long-lived token exists in this
 repository. npm attaches a provenance statement and rejects the upload unless
