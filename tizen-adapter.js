@@ -11,6 +11,13 @@
     var WEB_VERSION = 'DEVELOPMENT';
     var TIZEN_COMMIT = 'DEVELOPMENT';
 
+    // How deep the history was when this module was loaded, captured before
+    // jellyfin-web has had any chance to navigate. Exiting means returning to
+    // exactly this depth, so it has to be read now rather than on exit.
+    var HISTORY_DEPTH_AT_LOAD = (window.history && typeof window.history.length === 'number')
+        ? window.history.length
+        : 0;
+
     var currentApplication = {
         appInfo: {
             // jellyfin-tizen reads this as the "app version" for its API headers.
@@ -19,34 +26,52 @@
         },
         exit: function () {
             // TizenBrew hosts this module with a full page navigation (no iframe):
-            // its launcher does `location.href = <module url>` (tizenbrew-ui/src/
-            // components/Modules.jsx), which destroys the launcher's own JS context
-            // along with its Return-key handler. There is no widget of our own to
-            // close and no postMessage or WebSocket event the service accepts for
-            // returning to the launcher.
+            // its launcher does `location.href = module.appPath` (tizenbrew-ui/
+            // src/components/Modules.jsx:33), which destroys the launcher's own JS
+            // context along with its Return-key handler. TizenBrew exposes no API
+            // for returning to it: there is no window.tizenbrew object, no
+            // postMessage listener, and the service's WebSocket accepts no
+            // close-module event.
             //
-            // The launcher itself is widget-local content, not something served
-            // over HTTP: config.xml declares `<content src="tizenbrew-ui/dist/
-            // index.html"/>`. Navigating to that path as a URL therefore does NOT
-            // reach it. The module runs on 127.0.0.1:8081, whose proxy answers
-            // anything outside /module/ with a bare IP address as plain text,
-            // which is what produced a black screen on the TV.
+            // The launcher is widget-local content, not something served over
+            // HTTP: config.xml declares `<content src="tizenbrew-ui/dist/
+            // index.html"/>`. Navigating there by URL therefore does NOT reach it.
+            // The module runs on 127.0.0.1:8081, whose proxy answers anything
+            // outside /module/ with a bare IP address as plain text, which is what
+            // produced a black screen on the TV.
             //
-            // Because the launcher navigated with location.href rather than
-            // location.replace, its page is still the previous history entry, so
-            // going back returns to it without involving the proxy at all.
+            // Going back is the only route, but a single history.back() is wrong:
+            // that assumes the launcher is still the previous entry, which only
+            // holds until jellyfin-web navigates. It is a single-page app that
+            // pushes an entry per view, so after visiting settings a plain back()
+            // lands on a jellyfin page instead of the launcher. Jumping by the
+            // number of entries added since load clears the whole app in one go.
             try {
-                if (window.tizenbrew && typeof window.tizenbrew.exit === 'function') {
-                    window.tizenbrew.exit();
+                if (!window.history) {
+                    console.warn('tizen-adapter: no way to exit, window.history is unavailable');
                     return;
                 }
 
-                if (window.history && typeof window.history.back === 'function') {
+                var added = 0;
+                if (typeof window.history.length === 'number' && HISTORY_DEPTH_AT_LOAD > 0) {
+                    added = window.history.length - HISTORY_DEPTH_AT_LOAD;
+                }
+
+                // history.go(-n) needs n entries to actually exist. Guarding on
+                // `added` rather than trusting the arithmetic keeps a negative or
+                // zero value (a browser that caps history.length, or an exit
+                // before any navigation) on the plain single-step path.
+                if (added > 0 && typeof window.history.go === 'function') {
+                    window.history.go(-(added + 1));
+                    return;
+                }
+
+                if (typeof window.history.back === 'function') {
                     window.history.back();
                     return;
                 }
 
-                console.warn('tizen-adapter: no way to exit, window.history is unavailable');
+                console.warn('tizen-adapter: no way to exit, history has no back or go');
             } catch (err) {
                 console.warn('tizen-adapter: exit failed', err);
             }
