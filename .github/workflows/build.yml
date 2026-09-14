@@ -167,6 +167,9 @@ jobs:
       # jellyfin-web build, and jsDelivr purges per file, so listing all 1218
       # would be slow and pointless. One request covers the whole list.
       #
+      # A release purges two paths per file, the tag and the bare one. See the
+      # comment on PREFIXES below for why the bare path cannot be skipped.
+      #
       # continue-on-error because the package is already published by this point.
       # A failed purge means a slow rollout, never a failed release.
       - name: Refresh the jsDelivr cache for the published tag
@@ -176,13 +179,39 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           PKG="@pindagus/jellyfin-tizenbrew"
-          PATHS="$(printf '"/npm/%s@%s/%s",' \
-            "${PKG}" "${TAG}" "package.json" \
-            "${PKG}" "${TAG}" "tizen-adapter.js" \
-            "${PKG}" "${TAG}" "tizen.js" \
-            "${PKG}" "${TAG}" "index.html" \
-            "${PKG}" "${TAG}" "README.md" \
-            "${PKG}" "${TAG}" "www/index.html" | sed 's/,$//')"
+          FILES="package.json tizen-adapter.js tizen.js index.html README.md www/index.html"
+
+          # A release also has to purge the bare path, without any tag. That is
+          # what TizenBrew itself requests (tizenbrew/service/index.js fetches
+          # cdn.jsdelivr.net/<package>/...), and jsDelivr caches it separately
+          # from @latest, so purging only the tag leaves TizenBrew on whatever
+          # that path cached first. A prerelease leaves it alone: the bare path
+          # follows latest, never dev.
+          PREFIXES="${TAG}"
+          if [ "${TAG}" = "latest" ]; then
+            PREFIXES="${TAG} bare"
+          fi
+
+          PATHS=""
+          for prefix in ${PREFIXES}; do
+            for file in ${FILES}; do
+              if [ "${prefix}" = "bare" ]; then
+                PATHS="${PATHS}\"/npm/${PKG}/${file}\","
+              else
+                PATHS="${PATHS}\"/npm/${PKG}@${prefix}/${file}\","
+              fi
+            done
+          done
+          PATHS="${PATHS%,}"
+
+          # Named in both outcome messages, so a failure says which paths were
+          # left stale rather than only naming the tag.
+          PURGED="@${TAG}"
+          if [ "${TAG}" = "latest" ]; then
+            PURGED="@${TAG} and the untagged path"
+          fi
+
+          echo "Purging ${PURGED}"
 
           RESPONSE="$(curl -sS -X POST "https://purge.jsdelivr.net/" \
             -H "Content-Type: application/json" \
@@ -194,7 +223,7 @@ jobs:
           # assuming it worked: a throttled request still returns an id.
           PURGE_ID="$(echo "${RESPONSE}" | jq -r '.id // empty')"
           if [ -z "${PURGE_ID}" ]; then
-            echo "::warning::jsDelivr did not accept the purge; @${TAG} will refresh on its own within 12 hours"
+            echo "::warning::jsDelivr did not accept the purge; ${PURGED} will refresh on its own within 12 hours"
             exit 0
           fi
 
@@ -205,10 +234,56 @@ jobs:
           done
 
           if [ "${STATUS}" = "finished" ]; then
-            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on @${TAG}"
+            echo "jsDelivr now serves ${{ steps.release.outputs.version }} on ${PURGED}"
           else
-            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; @${TAG} will refresh on its own within 12 hours"
+            echo "::warning::purge ${PURGE_ID} still ${STATUS:-unknown}; ${PURGED} will refresh on its own within 12 hours"
           fi
+
+      # semantic-release works out the next version from the last tag reachable
+      # from the branch it runs on. A release on main tags main, and that tag
+      # only reaches dev once main is merged back. Without this, dev keeps
+      # counting from the last prerelease tag instead: after v1.0.0 shipped, a
+      # breaking change on dev became v1.0.0-dev.8 rather than v2.0.0-dev.1,
+      # hiding a major bump behind a 1.x number on the dev dist-tag.
+      #
+      # continue-on-error for the same reason as the purge above: the package is
+      # already published by this point. A merge that needs a human (a real
+      # conflict, or a protected branch) must not turn a finished release red.
+      - name: Merge main back into dev
+        if: >-
+          inputs.dry_run != true
+          && github.ref == 'refs/heads/main'
+          && steps.release.outputs.version != ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # The checkout ran with persist-credentials: false, so there is no
+          # credential for a push. Supply the token explicitly rather than
+          # re-enabling it for every earlier step.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git fetch origin dev main
+          git checkout -B dev origin/dev
+
+          if git merge-base --is-ancestor origin/main dev; then
+            echo "dev already contains main; nothing to merge"
+            exit 0
+          fi
+
+          if ! git merge --no-ff origin/main -m 'chore: 🔧 merge main back into dev'; then
+            git merge --abort || true
+            echo "::warning::main does not merge cleanly into dev; merge it by hand or the next dev prerelease will be numbered from the wrong base"
+            exit 1
+          fi
+
+          git push origin dev
+          echo "merged main back into dev"
 
       - name: Report what a release would do
         if: inputs.dry_run == true

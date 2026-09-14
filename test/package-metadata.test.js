@@ -43,7 +43,13 @@ describe('TizenBrew package metadata', () => {
         // upstream moved at all. Losing one fails no build; it silently
         // degrades every future release to a patch and makes the update check
         // rebuild forever, so both are asserted here.
-        expect(pkg.jellyfinWeb).toMatch(/^\d+\.\d+\.\d+/);
+        //
+        // jellyfin-web dropped the patch component with v12.0, so the tag is
+        // two-part now ("12.0") where it used to be three ("10.11.11"). Both
+        // have to pass. The end anchor keeps a prerelease tag such as
+        // "12.0-rc7" out: those exist upstream, but pinning one would publish a
+        // release built on a release candidate.
+        expect(pkg.jellyfinWeb).toMatch(/^\d+\.\d+(\.\d+)?$/);
         expect(pkg.jellyfinTizen).toMatch(/^[0-9a-f]{7,40}$/);
     });
 
